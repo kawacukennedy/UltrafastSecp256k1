@@ -182,6 +182,15 @@ machine: OpenCL off → hooks genuinely absent, the original P0 security
 assertion; `-DSECP256K1_BUILD_OPENCL=ON` → hooks genuinely present, a positive
 control that now means what it says.
 
+One more turn of the same screw: the first version of that `#else` branch named
+the null pointers after the hooks, so `nm` on a Debug build (where an unused
+file-scope variable is still emitted) found `ufsecp_test_opencl_bip352_inject_fault`
+as a local symbol and the P0 absence assertion failed on `CI / linux (gcc-14,
+Debug)` — a null pointer wearing the hook's name reads exactly like the hook.
+The pointers now carry neutral names with macros mapping the call sites onto
+them, so no symbol by those names exists unless the real hooks do. Checked with
+`nm` on a Debug build: 0 matches, `security_gate` 3/3.
+
 **The five libsecp256k1 shim entry points** in
 `test_regression_schnorr_r_zero_ct.cpp` needed no weak trick at all — the repo
 already has the right mechanism for shim-dependent modules, and this one just

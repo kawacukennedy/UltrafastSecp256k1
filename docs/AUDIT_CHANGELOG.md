@@ -161,53 +161,68 @@ for; where the backend is built they resolve normally and the flags do nothing.
 Not reproducible on this machine — there is no macOS host here, so this one rests
 on the linker semantics and the CI result rather than a local run.
 
-### Formal CT verification: two surfaces covered, and the lane itself is inert
+### CT evidence: five rows re-verified, and the formal lane found inert
 
-`docs/CT_EVIDENCE_STATUS.json` row `CT-ECDSA-RECOVER-SIGN` went past its 90-day
-freshness SLO (97 days), which is what fails `G-14 CT Evidence Freshness` and so
-`Preflight` and `Gate / PR-Push / Block 3`. `recovery.cpp` was in fact modified
-on 2026-09-03 (the in-place rewrite) without its CT evidence being re-derived,
-so the SLO is doing its job rather than misfiring.
+`docs/CT_EVIDENCE_STATUS.json` row `CT-ECDSA-RECOVER-SIGN` was 97 days past its
+90-day freshness SLO, which is what fails `G-14 CT Evidence Freshness` and so
+`Preflight` and `Gate / PR-Push / Block 3`. Not a misfire: `recovery.cpp` was
+modified on 2026-09-03 by the in-place point-op wave and its CT evidence was
+never re-derived. Three more blocking rows were 4 days from the same fate and
+`CT-SCALAR-INVERSE` was already 108 days stale, so all five were taken together
+rather than leaving CI to go red again on 2026-09-10.
 
-Two gaps were found while trying to refresh it honestly.
+Refreshed the way the previous stamp (1f950885, 2026-08-26) did it: re-run the
+row's committed evidence at a named HEAD and record what ran in `notes`. At HEAD
+`05879fe0`, gcc-14 14.2.0, Release, x86-64-v2:
 
-**The harness did not cover the surface.** `audit/test_ct_verif_formal.cpp` —
-the ctgrind-style classify/declassify harness — exercised `ct::ecdsa_sign`,
-`ct::schnorr_sign`, `ct::ecdsa_sign_hedged`, `ct::generator_mul` and
-`ct::scalar_mul`, but not `ct::ecdsa_sign_recoverable` and not
-`ct::scalar_inverse`, the two surfaces whose evidence is stale. Both now have
-cases. The recoverable one classifies the private key and declassifies only
-after the recovery id is produced, because that id is a parity bit read off the
-nonce point and branching on it is the leak the row exists to exclude. The
-inverse one covers random secrets plus the boundary values (1, n-1, 0) a
-data-dependent implementation special-cases.
+| Row | Committed evidence re-run | Result |
+|---|---|---|
+| CT-ECDSA-SIGN | `exploit_ct_systematic`; `signing_ct_scalar_correctness_regression` | 12/12; PASS in `unified_audit_runner` (467/467 modules, 262.9 s) |
+| CT-SCHNORR-SIGN | `regression_schnorr_ct_arithmetic` | PASS (HIGH-03 + HIGH-06) |
+| CT-ECDSA-RECOVER-SIGN | `exploit_recoverable_sign_ct`, `exploit_bug002_recovery_ct` | 24/24, 31/31 |
+| CT-KEYPAIR-SECKEY | `regression_ct_secret_is_zero` | 28/28 |
+| CT-SCALAR-INVERSE | `regression_ct_scalar_inverse_zero` | 451/451 |
 
-**The lane never actually runs.** `SECP256K1_CT_VALGRIND` — the macro that turns
-`SECP256K1_CLASSIFY`/`DECLASSIFY` into `VALGRIND_MAKE_MEM_UNDEFINED`/`DEFINED`
-and the only thing `ct_verif_active()` keys on — has **no CMake plumbing at
-all**. `ci/ctgrind_validate.sh` passes `-DSECP256K1_CT_VALGRIND=ON` to a CMake
-that has no such option, so it is silently dropped: the markers are no-ops in
-every build, `test_ct_verif_formal` returns `ADVISORY_SKIP_CODE` everywhere
-(the `ct_verif_formal (Skipped)` line in every ctest run), and the lane reports
-PASS on an uninstrumented binary.
+`ci/audit_gate.py` then reports `verdict=PASS with advisory, blocking=0`.
+
+Two gaps were found on the way there, and both are recorded rather than papered
+over.
+
+**The ctgrind harness did not cover two of these surfaces.**
+`audit/test_ct_verif_formal.cpp` exercised `ct::ecdsa_sign`, `ct::schnorr_sign`,
+`ct::ecdsa_sign_hedged`, `ct::generator_mul` and `ct::scalar_mul`, but neither
+`ct::ecdsa_sign_recoverable` nor `ct::scalar_inverse` — the two rows whose
+evidence had gone stale. Both now have cases. The recoverable one declassifies
+only after the recovery id is produced, because that id is a parity bit read off
+the nonce point and branching on it is precisely the leak the row exists to
+exclude; the inverse one covers random secrets plus the boundary values (1, n-1,
+0) that a data-dependent implementation special-cases.
+
+**The lane those cases belong to never actually runs.** `SECP256K1_CT_VALGRIND`
+— the macro that turns `SECP256K1_CLASSIFY`/`DECLASSIFY` into
+`VALGRIND_MAKE_MEM_UNDEFINED`/`DEFINED`, and the only thing `ct_verif_active()`
+keys on — has **no CMake plumbing at all**. `ci/ctgrind_validate.sh` passes
+`-DSECP256K1_CT_VALGRIND=ON` to a CMake with no such option, so it is silently
+dropped: the markers are no-ops in every build, `test_ct_verif_formal` returns
+`ADVISORY_SKIP_CODE` everywhere (the `ct_verif_formal (Skipped)` line in every
+ctest run), and the lane reports PASS on an uninstrumented binary.
 
 Forced on locally (g++-14, Debug `-O1`, `-DSECP256K1_CT_VALGRIND=1` through
 `CMAKE_CXX_FLAGS`) the harness activates for the first time: 119 checks pass and
 valgrind memcheck reports **2256 errors across 115 contexts**, in every section,
-not only the new ones. `fast::Scalar::from_limbs` (scalar.cpp:140) dominates at
-40 contexts; the recoverable-sign section contributes 6, at `ct_sign.cpp:518`
-and inside `rfc6979_nonce`. Those two look like documented public decision
-points that the harness simply never declassifies — libsecp256k1's
-`valgrind_ctime_test` declassifies the key-validity result before branching on
-it, and this harness does not — but "looks like" is not a verdict, and 115
-contexts have to be triaged one at a time before any of them can be called one.
+not only the two new ones. `fast::Scalar::from_limbs` (scalar.cpp:140) dominates
+at 40 contexts; the recoverable-sign section contributes 6, at `ct_sign.cpp:518`
+and inside `rfc6979_nonce`. Those two look like documented public decision points
+the harness simply never declassifies — libsecp256k1's `valgrind_ctime_test`
+declassifies the key-validity result before branching on it, and this harness
+does not — but "looks like" is not a verdict, and 115 contexts have to be triaged
+one at a time before any of them becomes one.
 
 So the CMake plumbing is deliberately **not** added here: switching the lane on
-before that triage would convert a silent skip into a loud, unexamined failure.
-The two new cases are kept because they are strictly more coverage than before
-and behave exactly as the rest of the module does without instrumentation.
-`last_verified` is **not** stamped: there is no verification behind it yet, and
-a date without a verification is the thing this manifest exists to prevent.
+before that triage would convert a silent skip into a loud, unexamined failure,
+which is a worse state than the one it replaces. The manifest's `notes` say
+plainly that the tool-verdict dimension was not re-derived, so the refreshed
+dates claim exactly the committed-evidence re-run behind them and nothing more.
 Recorded as knowledge-base finding `CT-VERIF-LANE-INERT-001` (P2, open).
 
 ### Stale generated counts

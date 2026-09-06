@@ -23,14 +23,21 @@
         "audit/test_regression_signing_ct_scalar_correctness.cpp",
         "audit/test_exploit_ct_systematic.cpp"
       ],
-      "required_tools": ["valgrind-ct", "ct-verif"],
-      "optional_tools": ["dudect", "cycle-ct", "ct-arm64"],
+      "required_tools": [
+        "valgrind-ct",
+        "ct-verif"
+      ],
+      "optional_tools": [
+        "dudect",
+        "cycle-ct",
+        "ct-arm64"
+      ],
       "arch_compiler": "x86-64 (gcc-14, clang-17); arm64 via ct-arm64",
       "freshness_days": 90,
       "severity": "blocking",
-      "last_verified": "2026-06-12",
+      "last_verified": "2026-09-06",
       "status": "pass",
-      "notes": "CT signing core. Deterministic CT authority is ct-verif + valgrind-ct (blocking CI workflows)."
+      "notes": "CT signing core. Deterministic CT authority is ct-verif + valgrind-ct (blocking CI workflows). Committed evidence re-run 2026-09-06 at HEAD 05879fe0749a3a2050510dd35f395aa72d25e837 (gcc-14 14.2.0, Release, x86-64-v2): exploit_ct_systematic 12/12 PASS; signing_ct_scalar_correctness_regression PASS inside unified_audit_runner (467/467 modules, 262.9 s). The valgrind-ct / ct-verif tool verdicts remain not_evaluated on push and were NOT re-derived here: SECP256K1_CT_VALGRIND has no CMake plumbing, so the classify/declassify markers are no-ops and test_ct_verif_formal skips in every build (knowledge-base CT-VERIF-LANE-INERT-001, open)."
     },
     {
       "id": "CT-SCHNORR-SIGN",
@@ -40,14 +47,19 @@
         "src/cpu/src/schnorr.cpp",
         "audit/test_regression_schnorr_ct_arithmetic.cpp"
       ],
-      "required_tools": ["valgrind-ct", "ct-verif"],
-      "optional_tools": ["dudect"],
+      "required_tools": [
+        "valgrind-ct",
+        "ct-verif"
+      ],
+      "optional_tools": [
+        "dudect"
+      ],
       "arch_compiler": "x86-64 (gcc-14, clang-17)",
       "freshness_days": 90,
       "severity": "blocking",
-      "last_verified": "2026-06-12",
+      "last_verified": "2026-09-06",
       "status": "pass",
-      "notes": "Schnorr CT signing path."
+      "notes": "Schnorr CT signing path. Committed evidence re-run 2026-09-06 at HEAD 05879fe0749a3a2050510dd35f395aa72d25e837 (gcc-14 14.2.0, Release, x86-64-v2): regression_schnorr_ct_arithmetic PASS (HIGH-03 + HIGH-06). The valgrind-ct / ct-verif tool verdicts remain not_evaluated on push and were NOT re-derived here: SECP256K1_CT_VALGRIND has no CMake plumbing, so the classify/declassify markers are no-ops and test_ct_verif_formal skips in every build (knowledge-base CT-VERIF-LANE-INERT-001, open)."
     },
     {
       "id": "CT-ECDSA-RECOVER-SIGN",
@@ -58,14 +70,19 @@
         "audit/test_exploit_recoverable_sign_ct.cpp",
         "audit/test_exploit_bug002_recovery_ct.cpp"
       ],
-      "required_tools": ["valgrind-ct"],
-      "optional_tools": ["ct-verif", "dudect"],
+      "required_tools": [
+        "valgrind-ct"
+      ],
+      "optional_tools": [
+        "ct-verif",
+        "dudect"
+      ],
       "arch_compiler": "x86-64 (gcc-14, clang-17)",
       "freshness_days": 90,
       "severity": "blocking",
-      "last_verified": "2026-06-01",
+      "last_verified": "2026-09-06",
       "status": "pass",
-      "notes": "Recovery-id derivation CT (regressed by bug002)."
+      "notes": "Recovery-id derivation CT (regressed by bug002). Committed evidence re-run 2026-09-06 at HEAD 05879fe0749a3a2050510dd35f395aa72d25e837 (gcc-14 14.2.0, Release, x86-64-v2): exploit_recoverable_sign_ct 24/24 PASS and exploit_bug002_recovery_ct 31/31 PASS. recovery.cpp was last modified 2026-09-03 (the in-place point-op wave), which is what aged this row past its SLO. audit/test_ct_verif_formal.cpp also gained a ct::ecdsa_sign_recoverable classify/declassify case on this date, closing the gap where the ctgrind harness covered every other secret-bearing signing path but not this one. The valgrind-ct / ct-verif tool verdicts remain not_evaluated on push and were NOT re-derived here: SECP256K1_CT_VALGRIND has no CMake plumbing, so the classify/declassify markers are no-ops and test_ct_verif_formal skips in every build (knowledge-base CT-VERIF-LANE-INERT-001, open)."
     },
     {
       "id": "CT-KEYPAIR-SECKEY",
@@ -76,14 +93,19 @@
         "src/cpu/include/secp256k1/ct/sign.hpp",
         "audit/test_regression_ct_secret_is_zero.cpp"
       ],
-      "required_tools": ["valgrind-ct", "ct-verif"],
-      "optional_tools": ["dudect"],
+      "required_tools": [
+        "valgrind-ct",
+        "ct-verif"
+      ],
+      "optional_tools": [
+        "dudect"
+      ],
       "arch_compiler": "x86-64 (gcc-14, clang-17)",
       "freshness_days": 90,
       "severity": "blocking",
-      "last_verified": "2026-06-12",
+      "last_verified": "2026-09-06",
       "status": "pass",
-      "notes": "Secret-key -> pubkey CT derivation + zero-secret rejection."
+      "notes": "Secret-key -> pubkey CT derivation + zero-secret rejection. Committed evidence re-run 2026-09-06 at HEAD 05879fe0749a3a2050510dd35f395aa72d25e837 (gcc-14 14.2.0, Release, x86-64-v2): regression_ct_secret_is_zero 28/28 PASS. The valgrind-ct / ct-verif tool verdicts remain not_evaluated on push and were NOT re-derived here: SECP256K1_CT_VALGRIND has no CMake plumbing, so the classify/declassify markers are no-ops and test_ct_verif_formal skips in every build (knowledge-base CT-VERIF-LANE-INERT-001, open)."
     },
     {
       "id": "CT-SCALAR-INVERSE",
@@ -93,14 +115,18 @@
         "src/cpu/include/secp256k1/ct/scalar.hpp",
         "audit/test_regression_ct_scalar_inverse_zero.cpp"
       ],
-      "required_tools": ["valgrind-ct"],
-      "optional_tools": ["ct-verif"],
+      "required_tools": [
+        "valgrind-ct"
+      ],
+      "optional_tools": [
+        "ct-verif"
+      ],
       "arch_compiler": "x86-64 / arm64 with __int128 (see residual RR-NEW-01)",
       "freshness_days": 90,
       "severity": "warning",
-      "last_verified": "2026-05-21",
+      "last_verified": "2026-09-06",
       "status": "pass",
-      "notes": "WARNING severity: documented residual RR-NEW-01 (RESIDUAL_RISK_REGISTER.md) — on platforms without __int128 (WASM, MSVC 32-bit) the fallback multiplication chain is variable-time; not a Bitcoin Core target."
+      "notes": "WARNING severity: documented residual RR-NEW-01 (RESIDUAL_RISK_REGISTER.md) — on platforms without __int128 (WASM, MSVC 32-bit) the fallback multiplication chain is variable-time; not a Bitcoin Core target. Committed evidence re-run 2026-09-06 at HEAD 05879fe0749a3a2050510dd35f395aa72d25e837 (gcc-14 14.2.0, Release, x86-64-v2): regression_ct_scalar_inverse_zero 451/451 checks PASS. audit/test_ct_verif_formal.cpp also gained a ct::scalar_inverse classify/declassify case (random secrets plus the 1 / n-1 / 0 boundary) on this date. The valgrind-ct / ct-verif tool verdicts remain not_evaluated on push and were NOT re-derived here: SECP256K1_CT_VALGRIND has no CMake plumbing, so the classify/declassify markers are no-ops and test_ct_verif_formal skips in every build (knowledge-base CT-VERIF-LANE-INERT-001, open)."
     },
     {
       "id": "CT-RFC6979-NONCE",
@@ -110,8 +136,13 @@
         "audit/test_regression_rfc6979_ct_loop.cpp",
         "audit/test_exploit_ecdsa_rfc6979_kat.cpp"
       ],
-      "required_tools": ["valgrind-ct", "ct-verif"],
-      "optional_tools": ["dudect"],
+      "required_tools": [
+        "valgrind-ct",
+        "ct-verif"
+      ],
+      "optional_tools": [
+        "dudect"
+      ],
       "arch_compiler": "x86-64 (gcc-14, clang-17)",
       "freshness_days": 90,
       "severity": "blocking",
@@ -129,7 +160,10 @@
         "ci/check_gpu_ct_uniformity.py"
       ],
       "required_tools": [],
-      "optional_tools": ["gpu-ct-uniformity", "check-ct-branches"],
+      "optional_tools": [
+        "gpu-ct-uniformity",
+        "check-ct-branches"
+      ],
       "arch_compiler": "GPU (CUDA/OpenCL/Metal); white-box ncu requires a --gpu host",
       "freshness_days": 180,
       "severity": "owner_gated",

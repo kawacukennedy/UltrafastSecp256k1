@@ -137,6 +137,30 @@ targets, and documented in `TEST_MATRIX.md`. Two supporting fixes were needed:
 
 Both dispatch and pass under the runner: `security_gate` 3/3.
 
+### macOS: a weak reference Mach-O will not leave undefined
+
+`unified_audit_runner` failed to link on macOS:
+
+```
+"_ufsecp_test_opencl_bip352_probe_fault", referenced from:
+    test_exploit_gpu_bip352_multispend_failclosed_run() ...
+ld: symbol(s) not found for architecture arm64
+```
+
+`test_exploit_gpu_bip352_multispend_failclosed.cpp` declares four OpenCL
+fault-injection hooks weak on purpose: they exist only when
+`gpu_backend_opencl.cpp` is compiled, and the test probes each for `nullptr` and
+advisory-skips when they are absent. On ELF, `__attribute__((weak))` gives
+exactly that. Mach-O does not — `weak_import` binds to zero only for a symbol
+some linked dylib could supply, and with no OpenCL backend in the link there is
+no such dylib, so `ld` refuses instead of resolving to zero. The four symbols are
+now named as allowed-undefined (`-U`) on the `unified_audit_runner` target under
+`APPLE`, which restores the nullptr-at-runtime behaviour the test was written
+for; where the backend is built they resolve normally and the flags do nothing.
+
+Not reproducible on this machine — there is no macOS host here, so this one rests
+on the linker semantics and the CI result rather than a local run.
+
 ### Formal CT verification: two surfaces covered, and the lane itself is inert
 
 `docs/CT_EVIDENCE_STATUS.json` row `CT-ECDSA-RECOVER-SIGN` went past its 90-day

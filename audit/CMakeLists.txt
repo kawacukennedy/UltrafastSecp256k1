@@ -4472,6 +4472,28 @@ else()
         test_regression_fe52_var_paths.cpp)
 endif()
 
+# -- macOS: allow the OpenCL fault-injection hooks to stay undefined ---------
+# test_exploit_gpu_bip352_multispend_failclosed.cpp references four extern "C"
+# hooks (ufsecp_test_opencl_bip352_{inject,clear,hit_count,probe}_fault) that
+# exist only when gpu_backend_opencl.cpp is compiled. It declares them weak and
+# probes each for nullptr, advisory-skipping when they are absent -- which is
+# exactly what ELF `__attribute__((weak))` gives on Linux.
+#
+# Mach-O does not. `weak_import` only binds to zero for a symbol some linked
+# dylib could supply; with no OpenCL backend in the link there is no such dylib,
+# so ld reports "symbol(s) not found for architecture arm64" and the whole
+# unified_audit_runner link fails -- the macOS (Release) CI leg. -U names each
+# symbol as allowed-undefined, restoring the intended nullptr-at-runtime
+# behaviour. When the backend IS built the symbols resolve normally and these
+# flags do nothing.
+if(APPLE AND SECP256K1_BUILD_BIP352)
+    target_link_options(unified_audit_runner PRIVATE
+        "LINKER:-U,_ufsecp_test_opencl_bip352_inject_fault"
+        "LINKER:-U,_ufsecp_test_opencl_bip352_clear_fault"
+        "LINKER:-U,_ufsecp_test_opencl_bip352_fault_hit_count"
+        "LINKER:-U,_ufsecp_test_opencl_bip352_probe_fault")
+endif()
+
 # -- P2: CT + shim fail-closed regression target (shim-linked standalone) -----
 if(TARGET secp256k1_shim OR SECP256K1_BUILD_SHIM)
     add_executable(test_regression_p2_ct_shim_fixes_standalone

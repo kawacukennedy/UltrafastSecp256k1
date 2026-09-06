@@ -4390,7 +4390,6 @@ target_sources(unified_audit_runner PRIVATE
     # SEC-002 and SEC-010 mirror their sibling BIP-352/FROST modules' guard +
     # the ADVISORY_SKIP_CODE stub already present in feature_run_stubs_unified.cpp.
     test_regression_hash_three_block_bounds.cpp
-    test_regression_schnorr_r_zero_ct.cpp
     $<$<BOOL:${SECP256K1_BUILD_BIP352}>:test_regression_opencl_bip352_scan_key_boundary.cpp>
     $<$<BOOL:${SECP256K1_BUILD_FROST}>:test_regression_frost_threshold_zero.cpp>
     # Feature module stubs: when a module is OFF, these provide advisory-skip
@@ -4462,6 +4461,14 @@ if(TARGET secp256k1_shim)
         # 2026-05-28 TRNC-1..4: NULL non-ctx arg illegal_callback in extrakeys + recovery tweak/convert
         test_regression_shim_tweak_recover_null_cb.cpp
 )
+    # SEC-006 R-zero CT guard: calls the shim's C ABI directly. It used to sit in
+    # the unconditional source list and weak-link the five secp256k1_* symbols,
+    # which is an ELF-only idiom -- Mach-O's weak_import needs a dylib that could
+    # supply them, and MSVC has no weak symbols at all, so both failed the
+    # unified_audit_runner link (CI / macos (Release), CI / windows (Release)).
+    # Compiled only where the shim is actually linked; shim_run_stubs_unified.cpp
+    # supplies the advisory-skip stub otherwise.
+    target_sources(unified_audit_runner PRIVATE test_regression_schnorr_r_zero_ct.cpp)
     target_compile_definitions(unified_audit_runner PRIVATE SECP256K1_BUILD_COMPAT_SHIM)
     target_link_libraries(unified_audit_runner PRIVATE secp256k1_shim)
     target_include_directories(unified_audit_runner PRIVATE
@@ -4470,28 +4477,6 @@ else()
     target_sources(unified_audit_runner PRIVATE shim_run_stubs_unified.cpp
         # fe52_var_paths does not need the shim — include in non-shim build.
         test_regression_fe52_var_paths.cpp)
-endif()
-
-# -- macOS: allow the OpenCL fault-injection hooks to stay undefined ---------
-# test_exploit_gpu_bip352_multispend_failclosed.cpp references four extern "C"
-# hooks (ufsecp_test_opencl_bip352_{inject,clear,hit_count,probe}_fault) that
-# exist only when gpu_backend_opencl.cpp is compiled. It declares them weak and
-# probes each for nullptr, advisory-skipping when they are absent -- which is
-# exactly what ELF `__attribute__((weak))` gives on Linux.
-#
-# Mach-O does not. `weak_import` only binds to zero for a symbol some linked
-# dylib could supply; with no OpenCL backend in the link there is no such dylib,
-# so ld reports "symbol(s) not found for architecture arm64" and the whole
-# unified_audit_runner link fails -- the macOS (Release) CI leg. -U names each
-# symbol as allowed-undefined, restoring the intended nullptr-at-runtime
-# behaviour. When the backend IS built the symbols resolve normally and these
-# flags do nothing.
-if(APPLE AND SECP256K1_BUILD_BIP352)
-    target_link_options(unified_audit_runner PRIVATE
-        "LINKER:-U,_ufsecp_test_opencl_bip352_inject_fault"
-        "LINKER:-U,_ufsecp_test_opencl_bip352_clear_fault"
-        "LINKER:-U,_ufsecp_test_opencl_bip352_fault_hit_count"
-        "LINKER:-U,_ufsecp_test_opencl_bip352_probe_fault")
 endif()
 
 # -- P2: CT + shim fail-closed regression target (shim-linked standalone) -----

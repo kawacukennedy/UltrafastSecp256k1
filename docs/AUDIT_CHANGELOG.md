@@ -1,10 +1,11 @@
 # Audit Changelog
 
-## 2026-09-06 — `dev` CI restored: three build breaks and three stale contracts
+## 2026-09-06 — `dev` CI restored: three build breaks, two link breaks, three stale contracts
 
 Every required check on `dev` was red. The causes below are independent; none is
-a defect in the library's arithmetic or protocol behaviour, and all three build
-breaks come from the same 2026-09-03 performance wave.
+a defect in the library's arithmetic or protocol behaviour. All three compile
+breaks come from the same 2026-09-03 performance wave; the two link breaks are
+older, and were simply unreachable behind them.
 
 ### The build break — a Scalar given a Point-only method
 
@@ -137,29 +138,58 @@ targets, and documented in `TEST_MATRIX.md`. Two supporting fixes were needed:
 
 Both dispatch and pass under the runner: `security_gate` 3/3.
 
-### macOS: a weak reference Mach-O will not leave undefined
+### macOS and Windows: weak undefined symbols are an ELF-only idiom
 
-`unified_audit_runner` failed to link on macOS:
+Three audit tests reference symbols that exist only in some build
+configurations and declare them weak so the file can sit in
+`unified_audit_runner`'s source list unconditionally and skip at runtime when
+they are absent. That works on ELF, where `__attribute__((weak))` leaves an
+undefined weak the linker binds to zero. It does not work anywhere else:
 
-```
-"_ufsecp_test_opencl_bip352_probe_fault", referenced from:
-    test_exploit_gpu_bip352_multispend_failclosed_run() ...
-ld: symbol(s) not found for architecture arm64
-```
+- Mach-O's `weak_import` binds to zero only for a symbol some **linked dylib**
+  could supply. With nothing in the link that could provide it, `ld` reports
+  `symbol(s) not found for architecture arm64` — `CI / macos (Release)`.
+- MSVC has no weak symbols at all; the declaration is simply strong and the
+  link fails with `LNK2019` — `CI / windows (Release)`.
 
-`test_exploit_gpu_bip352_multispend_failclosed.cpp` declares four OpenCL
-fault-injection hooks weak on purpose: they exist only when
-`gpu_backend_opencl.cpp` is compiled, and the test probes each for `nullptr` and
-advisory-skips when they are absent. On ELF, `__attribute__((weak))` gives
-exactly that. Mach-O does not — `weak_import` binds to zero only for a symbol
-some linked dylib could supply, and with no OpenCL backend in the link there is
-no such dylib, so `ld` refuses instead of resolving to zero. The four symbols are
-now named as allowed-undefined (`-U`) on the `unified_audit_runner` target under
-`APPLE`, which restores the nullptr-at-runtime behaviour the test was written
-for; where the backend is built they resolve normally and the flags do nothing.
+Two separate groups of symbols, both fixed by removing the weak trick rather
+than teaching each linker to tolerate it.
 
-Not reproducible on this machine — there is no macOS host here, so this one rests
-on the linker semantics and the CI result rather than a local run.
+**The OpenCL BIP-352 fault-injection hooks** (`ufsecp_test_opencl_bip352_*`,
+referenced by `test_exploit_gpu_bip352_multispend_failclosed.cpp` and
+`test_exploit_opencl_bip352_control_call_failclosed.cpp`) exist only when
+`gpu_backend_opencl.cpp` is compiled **with**
+`SECP256K1_BUILD_FAULT_INJECTION_TESTS`. Both conditions are knowable at
+compile time — `SECP256K1_BUILD_FAULT_INJECTION_TESTS` is set on
+`unified_audit_runner`, and `SECP256K1_HAVE_OPENCL` is carried by
+`audit_gpu_backends_provider`, which is what raw-compiles that backend into the
+binary. The declarations are now keyed on both; when either is off the four
+names are null function pointers, the existing availability probe takes the
+advisory-skip path exactly as before, and no undefined symbol reaches any
+linker. Verified locally in both directions: OpenCL off (null pointers, skip
+path) and `-DSECP256K1_BUILD_OPENCL=ON` (real hooks) both build and link clean.
+
+That rework exposed a vacuous proof. `regression_opencl_bip352_faultinject_symbols_absent`
+keys its expectation on `SECP256K1_BUILD_FAULT_INJECTION_TESTS` alone and, when
+that macro is set, asserts as a *positive control* that `nm` finds the hook
+symbols in the running binary — "proves the macro is not vacuously true". With
+OpenCL off, the macro is set but nothing defines the hooks, and the control was
+passing anyway: `nm` was matching the **undefined weak references** the two test
+files themselves contributed, not a definition. Removing the weak declarations
+made `nm` reflect reality and the control failed honestly. Its expectation is
+now keyed on the same pair of conditions, and checked in both directions on this
+machine: OpenCL off → hooks genuinely absent, the original P0 security
+assertion; `-DSECP256K1_BUILD_OPENCL=ON` → hooks genuinely present, a positive
+control that now means what it says.
+
+**The five libsecp256k1 shim entry points** in
+`test_regression_schnorr_r_zero_ct.cpp` needed no weak trick at all — the repo
+already has the right mechanism for shim-dependent modules, and this one just
+was not using it. The file moves into the `if(TARGET secp256k1_shim ...)` block
+of `audit/CMakeLists.txt`, `shim_run_stubs_unified.cpp` gains the matching
+`ADVISORY_SKIP_CODE` stub, and the declarations become plain and strong. The
+`#if !defined(_MSC_VER)` null-pointer guard inside the test goes away with them,
+since the symbols are now always present wherever the file is compiled.
 
 ### CT evidence: five rows re-verified, and the formal lane found inert
 

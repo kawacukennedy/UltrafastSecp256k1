@@ -164,7 +164,19 @@ static bool contains_any_hook_symbol(const std::string& nm_output, const char** 
 // variant that does not define it) keeps the original security assertion:
 // the hooks must be ABSENT. The two expectations are deliberately opposite
 // and both real -- this is not a weakened test, it is a two-sided one.
-#if defined(SECP256K1_BUILD_FAULT_INJECTION_TESTS)
+// SECP256K1_BUILD_FAULT_INJECTION_TESTS alone is not enough: the hooks are
+// defined in gpu_backend_opencl.cpp, which only enters this binary when the
+// OpenCL backend is compiled in (SECP256K1_HAVE_OPENCL, from
+// audit_gpu_backends_provider). With the macro set but OpenCL off, the macro is
+// vacuously true -- nothing defines the hooks and `nm` should find nothing.
+//
+// That case used to pass anyway, for the wrong reason: the two BIP-352 fault
+// -injection tests declared the hooks `__attribute__((weak))`, and an undefined
+// weak reference still appears in `nm` output. The positive control was
+// matching the reference, not a definition. Those declarations are now keyed on
+// the same two conditions (2026-09-06, the macOS/Windows link fix), so `nm`
+// reflects reality and this expectation has to as well.
+#if defined(SECP256K1_BUILD_FAULT_INJECTION_TESTS) && defined(SECP256K1_HAVE_OPENCL)
 static constexpr bool kHooksExpectedPresent = true;
 #else
 static constexpr bool kHooksExpectedPresent = false;

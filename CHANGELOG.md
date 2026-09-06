@@ -28,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#350](https://github.com/shrec/UltrafastSecp256k1/issues/350),
   [#352](https://github.com/shrec/UltrafastSecp256k1/issues/352)).
 
+- **[@tatotogonidze-cmd](https://github.com/tatotogonidze-cmd)** for the BIP-352 GPU audit coverage
+  finding ([#384](https://github.com/shrec/UltrafastSecp256k1/pull/384)). The proposed patch was superseded by an earlier fix on
+  `dev`, but it independently reached the same root cause — CPU-only builds
+  linked no GPU provider, so every `ufsecp_gpu_*` symbol in
+  `test_regression_bip352_ct_varbase` was undefined — and it separated "a GPU
+  backend was selected" from "the operation actually ran". That second
+  distinction was a real hole on our side: an available backend whose
+  `bip352_scan_batch_multispend` returns `UFSECP_ERR_GPU_UNSUPPORTED` produced a
+  CTest PASS with no GPU coverage verified. Ported as
+  `bcv_gpu_coverage_is_advisory()` with `test_bcv_coverage_gap_mutation`.
+
 ## [4.5.0] - 2026-07-07
 
 > **Bridge-free libbitcoin integration, public-data GPU parity, and release

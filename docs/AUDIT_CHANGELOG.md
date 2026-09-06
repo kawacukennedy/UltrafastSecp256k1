@@ -1,5 +1,50 @@
 # Audit Changelog
 
+## 2026-09-06 — BIP-352 GPU coverage gap: an available backend that runs nothing
+
+From reviewing PR #384 (an outside contribution proposing a different fix for a
+problem `999be718` had already solved). The PR is superseded and regresses the
+CPU-only case, but its review surfaced one real defect in **our** code, and that
+is what this entry lands.
+
+`regression_bip352_ct_varbase` keyed its exit code on `g_gpu_available`, which is
+set the moment `ufsecp_gpu_is_available()` reports a runtime-available backend —
+before any operation is attempted. If `bip352_scan_batch_multispend` then returns
+`UFSECP_ERR_GPU_UNSUPPORTED` for every call, the loop `continue`s past the BCV-6
+assertion, no oracle cell is ever compared, `g_fail` stays 0 — and the module
+returned 0, i.e. **CTest PASS**, for a run in which BCV-5..8 verified nothing. It
+printed "SKIP BCV-5..8: ... unsupported on every available GPU backend
+(advisory)" on the way past, which made the exit code and the console disagree.
+That is the silent-pass advisory this suite exists to forbid.
+
+Selecting a backend is not the same as exercising it. The decision now goes
+through `bcv_gpu_coverage_is_advisory(backend_selected, op_supported)`, in the
+same injectable-and-mutation-tested style as the two sibling decisions in this
+file, and `g_gpu_coverage_exercised` is set only where `any_supported` already
+proves a real comparison happened. `test_bcv_coverage_gap_mutation()` pins all
+three cases and needs no GPU. `_run()` now distinguishes "no provider" from
+"provider present, operation unsupported" in its printed notice.
+
+Verified on this machine, all three states:
+
+| Configuration | Result |
+|---|---|
+| CPU-only (no backend compiled) | CTest **SKIP** (77) — unchanged |
+| `-DSECP256K1_BUILD_OPENCL=ON`, real device | **PASS**, 15 scan-key cases × n_spend{1,2,3,8} = 840 byte-exact oracle cells checked |
+| available backend, operation unsupported | now a coverage gap → 77; pinned by `test_bcv_coverage_gap_mutation` |
+
+**PR #384 itself is not merged.** Its diagnosis was correct and independently
+reached — CPU-only builds linked no GPU provider, so every `ufsecp_gpu_*` symbol
+was undefined — but `999be718` had already fixed that by raw-compiling the C ABI
+closure into the target, which keeps BCV-5..8 running against the fallback
+provider. The PR compiles that half out instead: on a CPU-only build its target
+gets no `SECP256K1_BUILD_GPU_AUDIT`, the `return 77` is preprocessed away, and
+the module prints `PASS` and exits 0 with no GPU coverage and no notice — while
+the second, GPU-only target does not exist at all, because `src/gpu/CMakeLists.txt`
+never defines `secp256k1_gpu_host` when zero backends are compiled. It is also 89
+commits behind with content conflicts in both files, where git fuses the two
+mutually exclusive architectures rather than choosing between them.
+
 ## 2026-09-06 — `dev` CI restored: three build breaks, two link breaks, three stale contracts
 
 Every required check on `dev` was red. The causes below are independent; none is

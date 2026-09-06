@@ -62,15 +62,35 @@ advisory=false) fails if a coordinate leaves its declared bound. Verified by
 mutation: lowering `GEJ_X_MAGNITUDE_MAX` from 8 to 2 fails FMM-4 on both
 `Point::dbl` and `Point::add`, and restoring it passes 42/42.
 
-**Still open in #396:** per-value tracking. `FieldElement52` still carries no
-magnitude of its own, so a violation constructed and consumed inside one
-expression is still invisible. That needs shadow fields, which change
-`sizeof(FieldElement52)` from 40 to 48 — and that in turn overflows the fixed
-1504-byte opaque buffers the shim's C ABI reserves for `EcdsaPublicKey` (1456 →
-1744) and `SchnorrXonlyPubkey` (1488 → 1776), and moves `offsetof(CTAffinePoint, y)`
-off 40, which the AVX2 80-byte table windows in `ct_point.cpp` hard-code. None of
-those is a compile error. That work is a separate change with its own refusals,
-and the model landed here is the prerequisite for it.
+**Known limitation, recorded rather than tracked.** #396 is closed with this
+change; per-value tracking is deliberately not part of it. `FieldElement52` still
+carries no magnitude of its own, so a violation constructed and consumed inside a
+single expression remains invisible — the guard here is at the formula boundary,
+not at every operation.
+
+The reason it is not a follow-up ticket but a documented constraint: shadow
+fields take `sizeof(FieldElement52)` from 40 to 48, and three things break on
+that, **none of them a compile error in the build such a macro would target**.
+
+1. `EcdsaPublicKey` goes 1456 → 1744 and `SchnorrXonlyPubkey` 1488 → 1776,
+   against the fixed **1504-byte** opaque buffers the shim's C ABI reserves for
+   them (`secp256k1.h`, `secp256k1_schnorrsig.h`). In the C path that is a buffer
+   overflow with no diagnostic.
+2. `table_lookup_core` and `comb_lookup` (`ct_point.cpp`) hard-code an 80-byte
+   `x.n[0..4] || y.n[0..4]` window at `base0 / +32 / +64`, assuming
+   `offsetof(CTAffinePoint, y) == 40`. At 48 the AVX2 loads straddle padding:
+   compiles clean, runs branchless, returns wrong points.
+3. `field_52.hpp` / `field_52_impl.hpp` are installed public headers and `Point`
+   embeds FE52 by value, so a macro-on translation unit linked against a
+   macro-off one is a silent ODR/size mismatch.
+
+All three are solvable — CMake refusals for the shim and for install, the scalar
+`fe52_cmov` fallback in place of the AVX2 windows under the macro — but that is a
+change with its own proof obligations, and it is only worth starting from the
+measured model landed here: the postconditions it would assert had to be measured
+first, and one of them (the `sqr` top limb reaching `2*M48`) is not what the
+obvious derivation gives. Recorded in the knowledge base as
+`FE52-SHADOW-FIELD-BLOCKERS-001`.
 
 ## 2026-09-06 — `optimize("O2")` on the FE52 kernels is a no-op on clang (#336)
 

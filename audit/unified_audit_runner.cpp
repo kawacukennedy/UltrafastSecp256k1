@@ -743,6 +743,7 @@ int test_regression_cuda_buffer_raii_run(); // #345: CUDA_TRY early returns reta
 int test_regression_metal_batch_sentinel_run(); // #347: dispatch failure is not a signature verdict
 int test_regression_opencl_collect_dispatch_run(); // #346: padded collect dispatch + checked queue sync
 int test_regression_p2sh_context_abi_run(); // #348: additive P2SH context diagnostics ABI
+int test_regression_fe52_magnitude_model_run(); // #396: FE52 magnitude model pinned against the live formulas
 
 // === CI contract regressions (source-coupled, no library dependency) ===
 // Both read a workflow file out of the checked-out tree and assert the
@@ -1747,6 +1748,14 @@ static const AuditModule ALL_MODULES[] = {
     { "regression_opencl_collect_dispatch", "OpenCL ECDSA/Schnorr collect paths check kernel arguments and queue completion, use padded explicit-local dispatch, and retain bounds guards for ghost work-items (OCD-0..7)", "memory_safety", test_regression_opencl_collect_dispatch_run, false },
     // === 2026-07-21 P2SH context diagnostics ABI regression (#348) ===
     { "regression_p2sh_context_abi", "ufsecp_addr_p2sh_with_ctx provides context diagnostics while preserving the legacy ufsecp_addr_p2sh symbol and byte-identical output, including the zero-length edge (PCA-0..9 + PCA-5Z)", "memory_safety", test_regression_p2sh_context_abi_run, false },
+    // === #396: the 5x52 magnitude model, written down and measured ===
+    // The bounds holding the point formulas together lived only as integer
+    // literals at the negate() call sites and as prose beside them. This pins
+    // the live formulas against GEJ_{X,Y,Z}_MAGNITUDE_MAX every run, so a
+    // formula swap that violates a bound fails here instead of corrupting
+    // silently. Per-value tracking (shadow fields on FieldElement52) is the
+    // other half of #396 and is still open.
+    { "regression_fe52_magnitude_model", "#396: FE52 magnitude model -- classification incl. wrapped limbs, measured kernel postconditions (mul 1/1, sqr 1/2, normalize_weak 1/1), negate() bounds proven honest, live dbl/add steady state inside GEJ_{X,Y,Z}_MAGNITUDE_MAX, and the EFD dbl-2009-l near-miss shown to corrupt real products (FMM-1..5)", "math_invariants", test_regression_fe52_magnitude_model_run, false },
     // === CI contract regressions: the gate configuration is part of the
     // security surface, so it is audited like any other invariant. Both are
     // non-advisory: they read a file that always exists in a checked-out tree.

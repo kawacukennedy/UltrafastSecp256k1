@@ -1409,6 +1409,15 @@ target_compile_definitions(test_regression_inplace_point_ops_standalone PRIVATE 
 add_test(NAME regression_inplace_point_ops COMMAND test_regression_inplace_point_ops_standalone)
 set_tests_properties(regression_inplace_point_ops PROPERTIES TIMEOUT 120 LABELS "audit;regression;group_law;inplace")
 
+# #396: the FE52 magnitude model, measured against the live point formulas.
+add_executable(test_regression_fe52_magnitude_model_standalone test_regression_fe52_magnitude_model.cpp)
+audit_target_defaults(test_regression_fe52_magnitude_model_standalone)
+target_compile_definitions(test_regression_fe52_magnitude_model_standalone PRIVATE STANDALONE_TEST)
+add_test(NAME regression_fe52_magnitude_model COMMAND test_regression_fe52_magnitude_model_standalone)
+set_tests_properties(regression_fe52_magnitude_model PROPERTIES TIMEOUT 300
+    SKIP_RETURN_CODE 77
+    LABELS "audit;regression;field;magnitude;math_invariants")
+
 # CI workflow contract regressions. Both locate their workflow file by walking
 # up from the working directory, so they run correctly from the build tree as
 # well as from the repo root where unified_audit_runner dispatches them.
@@ -3970,6 +3979,7 @@ add_executable(unified_audit_runner
     test_regression_scalar_decomposition_and_comb.cpp
     test_regression_pippenger_window_bands.cpp
     test_regression_inplace_point_ops.cpp
+    test_regression_fe52_magnitude_model.cpp
     test_shim_security_gate_policy.cpp
     test_windows_cuda_workflow_contract.cpp
     test_regression_scalar_reduce_and_safegcd_divstep.cpp

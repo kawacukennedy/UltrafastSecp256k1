@@ -1,5 +1,77 @@
 # Audit Changelog
 
+## 2026-09-06 — the 5x52 magnitude model, written down and measured (#396)
+
+Issue #396: `FieldElement52` carries no magnitude information, so a magnitude
+precondition violation produces a silently wrong field element — valid unsigned
+limbs in valid memory, simply the wrong number. Nothing for ASan/UBSan/MSan to
+report. The bounds that hold the point formulas together lived as integer
+literals at the `negate()` call sites in `point.cpp` and as prose in the comments
+beside them, with nothing connecting the two. #397 was an instance of them
+disagreeing, by 4 magnitudes, for as long as it took someone to work the
+arithmetic out by hand.
+
+This lands the half that needs no layout change: the model as code, the bounds as
+constants, and the **live formulas measured against them on every run**.
+
+**The model.** `secp256k1/field_52_magnitude.hpp` — `magnitude_of(limbs)` and
+`magnitude_ok(limbs, m)`, header-only and `constexpr`. A value has magnitude m
+when `n[0..3] <= m*M52` and `n[4] <= m*M48`. The ceiling division is written as
+div-plus-remainder rather than `(limb + mask - 1) / mask`, because the value being
+classified may be a wrapped limb near 2^64 — which is precisely the state the
+model exists to catch, and which the rounding form would overflow and report as a
+*small* magnitude.
+
+**The bounds.** `GEJ_X_MAGNITUDE_MAX = 8`, `GEJ_Y_MAGNITUDE_MAX = 4`,
+`GEJ_Z_MAGNITUDE_MAX = 1` in `point.hpp`, the values `jac52_add_mixed_inplace`'s
+`negate()` literals already assume. First time they exist as constants rather
+than as folklore in four comments.
+
+**Do not transfer libsecp256k1's numbers.** Their `negate` computes
+`2*(m+1)*p - a`; ours computes `(m+1)*p - a`. Our slack is exactly half theirs
+and their published ceilings do not apply here.
+
+**Measured on this tree** (g++-14 -O2, x86-64), all of it asserted by the new
+module rather than recorded as prose:
+
+| what | measured |
+|---|---|
+| `fe52_mul_inner` output, magnitude-1 inputs | `n[0..3] <= 1*M52`, `n[4] <= 1*M48` |
+| `fe52_sqr_inner` output, magnitude-1 inputs | `n[0..3] <= 1*M52`, **`n[4] <= 2*M48`** |
+| `normalize_weak` output | `n[0..3] <= 1*M52`, `n[4] <= 1*M48` |
+| `negate(4)` | correct through actual magnitude 5, first wrong at **6** |
+| `negate(8)` | correct through actual magnitude 9, first wrong at **10** |
+| `Point::dbl` steady state | X 3, Y 3, Z 1 |
+| `Point::add` steady state | X 4, Y 2, Z 1 |
+
+The squaring kernel's top limb reaching `2*M48` is why a model derived from the
+low limbs alone is wrong for this tree — a plausible `n[4] <= m<<48` rule would
+have aborted on the first field square.
+
+**The near-miss, now measured rather than modelled.** #396 names three published,
+mathematically correct EFD doubling formulas — `dbl-2009-l`, `dbl-2007-bl`,
+`mdbl-2007-bl` — whose steady state is X 22 / Y 10. Both are past the thresholds
+above. Feeding a magnitude-22 value through `negate(8)` and then a multiply
+disagrees with the mathematically correct answer in **396 of 400** trials; the
+magnitude-10 Y path through `negate(4)` in **391 of 400**. The control at the
+magnitude-3 the live formulas actually reach corrupts **0 of 400**. So the risk
+the issue describes is real arithmetic corruption, not a bookkeeping mismatch.
+
+**Teeth.** `regression_fe52_magnitude_model` (FMM-1..5, math_invariants,
+advisory=false) fails if a coordinate leaves its declared bound. Verified by
+mutation: lowering `GEJ_X_MAGNITUDE_MAX` from 8 to 2 fails FMM-4 on both
+`Point::dbl` and `Point::add`, and restoring it passes 42/42.
+
+**Still open in #396:** per-value tracking. `FieldElement52` still carries no
+magnitude of its own, so a violation constructed and consumed inside one
+expression is still invisible. That needs shadow fields, which change
+`sizeof(FieldElement52)` from 40 to 48 — and that in turn overflows the fixed
+1504-byte opaque buffers the shim's C ABI reserves for `EcdsaPublicKey` (1456 →
+1744) and `SchnorrXonlyPubkey` (1488 → 1776), and moves `offsetof(CTAffinePoint, y)`
+off 40, which the AVX2 80-byte table windows in `ct_point.cpp` hard-code. None of
+those is a compile error. That work is a separate change with its own refusals,
+and the model landed here is the prerequisite for it.
+
 ## 2026-09-06 — `optimize("O2")` on the FE52 kernels is a no-op on clang (#336)
 
 `fe52_mul_inner` and `fe52_sqr_inner` carry

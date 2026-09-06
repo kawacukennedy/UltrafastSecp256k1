@@ -204,6 +204,7 @@ Scalar Scalar::from_bytes(const std::uint8_t* bytes32) {
     // and then selected between two 4-limb results. Measured on the same inputs:
     // that shape 18.68 ns, this one 7.82 ns (libsecp's set_b32: 8.10 ns).
     std::uint64_t const m = std::uint64_t(0) - std::uint64_t(order_overflow(limbs));
+#if defined(__SIZEOF_INT128__) && !defined(SECP256K1_NO_INT128)
     unsigned __int128 t = static_cast<unsigned __int128>(limbs[0]) + (ORDER_COMPLEMENT_0 & m);
     limbs[0] = static_cast<std::uint64_t>(t); t >>= 64;
     t += static_cast<unsigned __int128>(limbs[1]) + (ORDER_COMPLEMENT_1 & m);
@@ -212,6 +213,19 @@ Scalar Scalar::from_bytes(const std::uint8_t* bytes32) {
     limbs[2] = static_cast<std::uint64_t>(t); t >>= 64;
     t += limbs[3];
     limbs[3] = static_cast<std::uint64_t>(t);   // the carry out of 2^256 IS the reduction
+#else
+    // MSVC and the embedded targets have no __int128 (SECP256K1_NO_INT128).
+    // Identical arithmetic through add64's carry chain -- same addend, same
+    // discarded carry out of the top limb, same branchlessness; only the
+    // accumulator width differs. add64 is _addcarry_u64 on MSVC.
+    limbs4 const addend{ORDER_COMPLEMENT_0 & m, ORDER_COMPLEMENT_1 & m,
+                        ORDER_COMPLEMENT_2 & m, 0ULL};
+    unsigned char carry = 0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        limbs[i] = add64(limbs[i], addend[i], carry);
+    }
+    // `carry` here is the carry out of 2^256 -- dropping it IS the reduction.
+#endif
 
     Scalar s;
     s.limbs_ = limbs;

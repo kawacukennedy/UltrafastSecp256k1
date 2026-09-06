@@ -1,9 +1,10 @@
 # Audit Changelog
 
-## 2026-09-06 — `dev` CI restored: two build breaks and three stale contracts
+## 2026-09-06 — `dev` CI restored: three build breaks and three stale contracts
 
-Every required check on `dev` was red. Five independent causes, none of them a
-defect in the library's arithmetic or protocol behaviour.
+Every required check on `dev` was red. The causes below are independent; none is
+a defect in the library's arithmetic or protocol behaviour, and all three build
+breaks come from the same 2026-09-03 performance wave.
 
 ### The build break — a Scalar given a Point-only method
 
@@ -59,6 +60,33 @@ Local `-Werror` reproduction (g++-14, Release, `-DSECP256K1_MARCH=x86-64-v3`,
 tests/bench/examples off, exactly the CI configure): 46/46 targets, zero
 diagnostics.
 
+### MSVC: an ungated `__int128` in the same perf rewrite
+
+Removing the dead `ge()` let the Windows legs get far enough to reveal the other
+half of 7365bb3e. Its rewritten `Scalar::from_bytes` reduces by adding
+2^256 - n through an `unsigned __int128` accumulator, with no guard:
+
+```
+src\cpu\src\scalar.cpp(207): error C4235: nonstandard extension used:
+  '__int128' keyword not supported on this architecture
+```
+
+Every other `__int128` use in the file sits inside `#ifndef SECP256K1_NO_INT128`
+or `#if defined(__SIZEOF_INT128__) && !defined(SECP256K1_NO_INT128)` — the
+gating 9572d8ad added for exactly this reason — and CMake defines
+`SECP256K1_NO_INT128=1` for MSVC. This one site was written without it. It broke
+`Windows CUDA` and `Benchmark Dashboard / benchmark-windows`; `windows-arm64-clang-cl`
+was unaffected because clang-cl does implement `__int128`.
+
+`from_bytes` now carries the same guard with a portable `#else` that runs the
+identical carry chain through `add64` (`_addcarry_u64` on MSVC): same addend,
+same discarded carry out of the top limb, same branchlessness — only the
+accumulator width differs. Validated by building the whole tree with
+`-DSECP256K1_NO_INT128=1` and running the suite on that configuration:
+**422/422 passed**, which includes
+`regression_scalar_reduce_and_safegcd_divstep`'s independent base-256
+recomputation of the reduction at n-1, n and 2^256-1.
+
 ### The Windows CUDA contract failed for a line-ending reason
 
 `audit/test_windows_cuda_workflow_contract.cpp` reads `windows-cuda.yml` with
@@ -108,6 +136,55 @@ targets, and documented in `TEST_MATRIX.md`. Two supporting fixes were needed:
   is writing into. The root is now process-unique — four concurrent runs pass.
 
 Both dispatch and pass under the runner: `security_gate` 3/3.
+
+### Formal CT verification: two surfaces covered, and the lane itself is inert
+
+`docs/CT_EVIDENCE_STATUS.json` row `CT-ECDSA-RECOVER-SIGN` went past its 90-day
+freshness SLO (97 days), which is what fails `G-14 CT Evidence Freshness` and so
+`Preflight` and `Gate / PR-Push / Block 3`. `recovery.cpp` was in fact modified
+on 2026-09-03 (the in-place rewrite) without its CT evidence being re-derived,
+so the SLO is doing its job rather than misfiring.
+
+Two gaps were found while trying to refresh it honestly.
+
+**The harness did not cover the surface.** `audit/test_ct_verif_formal.cpp` —
+the ctgrind-style classify/declassify harness — exercised `ct::ecdsa_sign`,
+`ct::schnorr_sign`, `ct::ecdsa_sign_hedged`, `ct::generator_mul` and
+`ct::scalar_mul`, but not `ct::ecdsa_sign_recoverable` and not
+`ct::scalar_inverse`, the two surfaces whose evidence is stale. Both now have
+cases. The recoverable one classifies the private key and declassifies only
+after the recovery id is produced, because that id is a parity bit read off the
+nonce point and branching on it is the leak the row exists to exclude. The
+inverse one covers random secrets plus the boundary values (1, n-1, 0) a
+data-dependent implementation special-cases.
+
+**The lane never actually runs.** `SECP256K1_CT_VALGRIND` — the macro that turns
+`SECP256K1_CLASSIFY`/`DECLASSIFY` into `VALGRIND_MAKE_MEM_UNDEFINED`/`DEFINED`
+and the only thing `ct_verif_active()` keys on — has **no CMake plumbing at
+all**. `ci/ctgrind_validate.sh` passes `-DSECP256K1_CT_VALGRIND=ON` to a CMake
+that has no such option, so it is silently dropped: the markers are no-ops in
+every build, `test_ct_verif_formal` returns `ADVISORY_SKIP_CODE` everywhere
+(the `ct_verif_formal (Skipped)` line in every ctest run), and the lane reports
+PASS on an uninstrumented binary.
+
+Forced on locally (g++-14, Debug `-O1`, `-DSECP256K1_CT_VALGRIND=1` through
+`CMAKE_CXX_FLAGS`) the harness activates for the first time: 119 checks pass and
+valgrind memcheck reports **2256 errors across 115 contexts**, in every section,
+not only the new ones. `fast::Scalar::from_limbs` (scalar.cpp:140) dominates at
+40 contexts; the recoverable-sign section contributes 6, at `ct_sign.cpp:518`
+and inside `rfc6979_nonce`. Those two look like documented public decision
+points that the harness simply never declassifies — libsecp256k1's
+`valgrind_ctime_test` declassifies the key-validity result before branching on
+it, and this harness does not — but "looks like" is not a verdict, and 115
+contexts have to be triaged one at a time before any of them can be called one.
+
+So the CMake plumbing is deliberately **not** added here: switching the lane on
+before that triage would convert a silent skip into a loud, unexamined failure.
+The two new cases are kept because they are strictly more coverage than before
+and behave exactly as the rest of the module does without instrumentation.
+`last_verified` is **not** stamped: there is no verification behind it yet, and
+a date without a verification is the thing this manifest exists to prevent.
+Recorded as knowledge-base finding `CT-VERIF-LANE-INERT-001` (P2, open).
 
 ### Stale generated counts
 

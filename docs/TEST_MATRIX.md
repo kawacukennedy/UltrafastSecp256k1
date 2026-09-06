@@ -523,6 +523,12 @@ same pass:
   and executes the real bash+python pipeline against synthetic audit reports,
   so advisory-only failures must not hard-fail and unexplained non-zero exits
   must (section security_gate, advisory=false)
+- `ct_verif_formal` gained two cases — `audit/test_ct_verif_formal.cpp`:
+  `ct::ecdsa_sign_recoverable` (CT-ECDSA-RECOVER-SIGN) and `ct::scalar_inverse`
+  (CT-SCALAR-INVERSE), the two `docs/CT_EVIDENCE_STATUS.json` surfaces the
+  ctgrind-style classify/declassify harness did not exercise. The module still
+  returns `ADVISORY_SKIP_CODE` unless built with the CT-Valgrind markers active
+  (section ct_analysis, advisory=true)
 - `windows_cuda_workflow_contract` — `audit/test_windows_cuda_workflow_contract.cpp`:
   contract for `.github/workflows/windows-cuda.yml` — pinned toolkit revision
   and version, Windows-valid sub-packages, fail-fast toolchain diagnostics,

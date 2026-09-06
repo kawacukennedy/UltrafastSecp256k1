@@ -26,6 +26,24 @@ struct Check {
 
 bool locate_workflow_file(std::string& out_path) {
     namespace fs = std::filesystem;
+    // Compile-time repo root first: unified_audit_runner is run from arbitrary
+    // working directories (ci/check_audit_cwd_independence.py runs it from an
+    // unrelated /tmp on purpose), and a CWD-relative walk-up finds nothing
+    // there. UFSECP_SOURCE_ROOT is an absolute path baked in by
+    // audit/CMakeLists.txt on the machine that later runs the binary. The
+    // walk-up stays as the fallback for translation units built without it --
+    // the standalone cl.exe compile in .github/workflows/windows-cuda.yml,
+    // which runs from the repo root.
+#ifdef UFSECP_SOURCE_ROOT
+    {
+        std::error_code ec;
+        fs::path candidate = fs::path(UFSECP_SOURCE_ROOT) / ".github" / "workflows" / "windows-cuda.yml";
+        if (fs::exists(candidate, ec)) {
+            out_path = candidate.string();
+            return true;
+        }
+    }
+#endif
     fs::path dir = fs::current_path();
     for (int i = 0; i < 10; ++i) {
         fs::path candidate = dir / ".github" / "workflows" / "windows-cuda.yml";

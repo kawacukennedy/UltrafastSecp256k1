@@ -191,6 +191,31 @@ of `audit/CMakeLists.txt`, `shim_run_stubs_unified.cpp` gains the matching
 `#if !defined(_MSC_VER)` null-pointer guard inside the test goes away with them,
 since the symbols are now always present wherever the file is compiled.
 
+### The two newly wired modules had to earn their place
+
+Wiring the two CI-contract tests into `unified_audit_runner` put them under two
+rules the standalone targets never applied.
+
+`ci/check_audit_cwd_independence.py` runs the whole runner from an unrelated
+working directory (`/tmp`) and requires every mandatory module to behave
+identically there. Both new modules resolved their workflow file by walking up
+from the current directory, which finds nothing from `/tmp`, so both failed and
+took the gate with them. They now try the compile-time `UFSECP_SOURCE_ROOT`
+first — the absolute repo path `audit/CMakeLists.txt` already bakes into the
+runner for exactly this reason, and what every other source-reading module here
+uses — keeping the walk-up as the fallback for translation units built without
+it (the standalone `cl.exe` compile in `windows-cuda.yml`, which runs from the
+repo root). Verified by running the runner from `/tmp`: `security_gate` 3/3.
+
+`shim_security_gate_policy`'s layer 2 extracts the gate step's `run:` script and
+executes it as a POSIX shell script. Its availability probe asked only whether
+`bash` and `python3` are on PATH, which is a false positive on Windows: both can
+be present (Git Bash, the py launcher) while the script still cannot run as
+written — native paths, drive letters, different quoting — so layer 2 failed on
+the Windows runner for reasons unrelated to the `gate.yml` contract under test.
+Layer 2 is now skipped on `_WIN32` explicitly. Layer 1, the portable half, still
+runs everywhere.
+
 ### CT evidence: five rows re-verified, and the formal lane found inert
 
 `docs/CT_EVIDENCE_STATUS.json` row `CT-ECDSA-RECOVER-SIGN` was 97 days past its

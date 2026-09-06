@@ -72,6 +72,20 @@ const char* kRunnerInvocation =
 // path only works in one of them.
 bool locate_repo_file(const std::string& rel_path, std::string& out_path) {
     namespace fs = std::filesystem;
+    // Compile-time repo root first -- see the note in
+    // test_windows_cuda_workflow_contract.cpp: unified_audit_runner is
+    // deliberately run from an unrelated working directory by
+    // ci/check_audit_cwd_independence.py, where a walk-up resolves nothing.
+#ifdef UFSECP_SOURCE_ROOT
+    {
+        std::error_code ec;
+        fs::path candidate = fs::path(UFSECP_SOURCE_ROOT) / rel_path;
+        if (fs::exists(candidate, ec)) {
+            out_path = candidate.string();
+            return true;
+        }
+    }
+#endif
     fs::path dir = fs::current_path();
     for (int i = 0; i < 10; ++i) {
         fs::path candidate = dir / rel_path;
@@ -337,8 +351,21 @@ int test_shim_security_gate_policy_run() {
     // rework): extract the real run script, dedent it exactly as YAML would,
     // swap the external runner for a controlled stub, and execute the actual
     // bash+python pipeline end-to-end for each policy outcome.
-    bool have_bash = tool_available("bash --version");
-    bool have_python3 = tool_available("python3 --version");
+    // Layer 2 executes the extracted step as a POSIX shell script: it cds into
+    // a scratch directory, runs bash and python3, and compares exit codes. On
+    // Windows both tools may be present (Git Bash, the python launcher) while
+    // the script still cannot run as written -- native paths, drive letters and
+    // the shell's own quoting differ -- so a probe that only asks "is bash on
+    // PATH" reports a false positive there and layer 2 fails for reasons that
+    // have nothing to do with the gate.yml contract under test. Layer 1 is the
+    // portable half and still runs everywhere.
+#if defined(_WIN32)
+    bool const have_bash = false;
+    bool const have_python3 = false;
+#else
+    bool const have_bash = tool_available("bash --version");
+    bool const have_python3 = tool_available("python3 --version");
+#endif
     if (!have_bash || !have_python3) {
         printf("  [shim-gate-report-policy] bash/python3 unavailable in this environment -- "
                "skipping executable scenario checks (static contract checks above still apply)\n");

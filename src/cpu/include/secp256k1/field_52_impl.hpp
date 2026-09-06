@@ -183,12 +183,30 @@ using namespace fe52_constants;
 // Measured 2026-06-15: routing the verify table build to `_var` gives 0 speedup
 // under LTO (GCC already emits MULX/ADCX/ADOX from __int128) — kb GLV52-VAR-TABLE-001.
 //
-// Do NOT use SECP256K1_FE52_FORCE_INLINE (always_inline) here.
-// With always_inline the function is inlined into every caller and compiled
-// at the caller's optimization level, defeating the optimize("O2") attribute.
-// As a non-inlined static function compiled at O2, the __int128 arithmetic
-// produces correct results on GCC-13 and Clang in both Debug and coverage
-// builds where -O0 would otherwise cause wrong results.
+// SUPERSEDED as an instruction, kept for the reasoning. This block used to say
+// "Do NOT use SECP256K1_FE52_FORCE_INLINE (always_inline) here", which the
+// shipped x86-64 default has contradicted since the inlining A/B below: at
+// UFSECP_FE52_FORCE_INLINE_KERNELS=1 these kernels ARE always_inline. Read the
+// "Field-kernel inlining policy" block further down for the current rule; this
+// paragraph explains only what the optimize("O2") attribute is still doing on
+// the non-force-inline path.
+//
+// With always_inline the function is inlined into every caller and compiled at
+// the caller's optimization level, which is why the optimize("O2") attribute
+// applies only when the kernel is left out of line. As a non-inlined static
+// function compiled at O2, the __int128 arithmetic keeps the same shape in
+// Debug and coverage builds that would otherwise compile it at -O0.
+//
+// That attribute is GCC-only in effect. Clang does not implement optimize():
+// it emits "unknown attribute 'optimize' ignored [-Wunknown-attributes]" and
+// compiles as if only noinline were written, so on clang the Debug/coverage
+// argument above does not apply -- the kernel is simply left out of line at
+// whatever level the TU is built. Measured 2026-09-06 on this tree: clang-17
+// --target=aarch64-linux-gnu -mcpu=apple-m1 -O3 produces byte-identical
+// assembly with the clause and with plain noinline, while aarch64 gcc-13 at
+// -O0 keeps the kernel at 494 asm lines instead of the 3029 the force-inline
+// path produces. The guards below therefore give clang plain noinline and keep
+// the optimize clause for GCC, which is a codegen no-op on both.
 // Instruction mix, disassembled from a -O3 -march=native GCC 14.2 build
 // (experiments/representation_search). 228 instructions:
 //     31  multiplies        13.6%
@@ -234,7 +252,17 @@ using namespace fe52_constants;
 // has NOT been run on them -- enabling it there is a guess, not a result. Run
 // the same warm-vs-warm A/B on the real device before flipping the default.
 //
-// Override either way with -DUFSECP_FE52_FORCE_INLINE_KERNELS=0 / =1.
+// Override either way by defining the macro for EVERY translation unit in the
+// binary, e.g.
+//     cmake -DCMAKE_CXX_FLAGS=-DUFSECP_FE52_FORCE_INLINE_KERNELS=1 ...
+// It must be the same value everywhere: FieldElement52::operator* and friends
+// are always_inline external-linkage inlines whose bodies call these kernels,
+// so a binary built half one way and half the other is an ODR mismatch, not a
+// diagnostic. There is no CMake option for this yet -- see GitHub issue #336.
+//
+// On targets without __int128 (ESP32/STM32/Emscripten and anything else where
+// point.hpp does not include field_52.hpp) this header is never compiled and
+// the macro is inert.
 #if !defined(UFSECP_FE52_FORCE_INLINE_KERNELS)
 #  if defined(__x86_64__) || defined(_M_X64)
 #    define UFSECP_FE52_FORCE_INLINE_KERNELS 1
@@ -258,8 +286,16 @@ using namespace fe52_constants;
 // at the CALL SITES, not in these wrappers.
 #if UFSECP_FE52_FORCE_INLINE_KERNELS
 SECP256K1_FE52_FORCE_INLINE
-#elif defined(__GNUC__) || defined(__clang__)
+// __GNUC__ first, and explicitly not clang: clang defines __GNUC__ too, and it
+// does NOT implement optimize() -- it emits "unknown attribute 'optimize'
+// ignored [-Wunknown-attributes]" and compiles as if only noinline were there.
+// Keeping the clause on clang bought nothing and cost two warnings per
+// translation unit on every ARM64 clang build. See the policy block above.
+#elif defined(__GNUC__) && !defined(__clang__)
 __attribute__((optimize("O2"), noinline))
+static
+#elif defined(__clang__)
+__attribute__((noinline))
 static
 #else
 SECP256K1_FE52_FORCE_INLINE
@@ -1471,8 +1507,16 @@ void fe52_mul_inner_var(std::uint64_t* SECP256K1_RESTRICT r,
 // (42.7%) -- the same data-movement-dominated shape.
 #if UFSECP_FE52_FORCE_INLINE_KERNELS
 SECP256K1_FE52_FORCE_INLINE
-#elif defined(__GNUC__) || defined(__clang__)
+// __GNUC__ first, and explicitly not clang: clang defines __GNUC__ too, and it
+// does NOT implement optimize() -- it emits "unknown attribute 'optimize'
+// ignored [-Wunknown-attributes]" and compiles as if only noinline were there.
+// Keeping the clause on clang bought nothing and cost two warnings per
+// translation unit on every ARM64 clang build. See the policy block above.
+#elif defined(__GNUC__) && !defined(__clang__)
 __attribute__((optimize("O2"), noinline))
+static
+#elif defined(__clang__)
+__attribute__((noinline))
 static
 #else
 SECP256K1_FE52_FORCE_INLINE

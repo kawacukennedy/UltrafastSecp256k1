@@ -1,5 +1,51 @@
 # Audit Changelog
 
+## 2026-09-06 — `optimize("O2")` on the FE52 kernels is a no-op on clang (#336)
+
+`fe52_mul_inner` and `fe52_sqr_inner` carry
+`__attribute__((optimize("O2"), noinline)) static` whenever
+`UFSECP_FE52_FORCE_INLINE_KERNELS` is 0 — which is every target except x86-64.
+The guard selected that branch for `defined(__GNUC__) || defined(__clang__)`.
+Clang defines `__GNUC__` and does **not** implement `optimize()`:
+
+```
+field_52_impl.hpp:262:16: warning: unknown attribute 'optimize' ignored
+                                   [-Wunknown-attributes]
+field_52_impl.hpp:1475:16: warning: unknown attribute 'optimize' ignored
+```
+
+Two warnings per translation unit, on every ARM64 clang build, for a clause that
+was doing nothing. The clause is now GCC-only and clang gets plain `noinline`.
+
+Measured, not assumed — assembly compared before and after the edit, normalised
+only for `.file`/`.ident`:
+
+| compiler | target | flag | result |
+|---|---|---|---|
+| clang-17 | aarch64, `-mcpu=apple-m1 -O3` | 0 | byte-identical, 2 warnings → **0** |
+| aarch64 gcc-13 | `-O2` and `-O0` | 0 and 1 | byte-identical |
+| g++-14, clang++-17 | x86-64 `-O2` | 0 and 1 | byte-identical |
+
+The GCC branch is untouched deliberately: the attribute is load-bearing there.
+On aarch64 gcc-13 at `-O0` with the flag off, the kernel compiles to 494 asm
+lines rather than the 3029 the force-inline path produces — that is the
+Debug/coverage behaviour the attribute exists for, and it survives.
+
+**No default changed on any target.** `UFSECP_FE52_FORCE_INLINE_KERNELS` is still
+1 on x86-64 and 0 elsewhere. Issue #336's remaining ARM64 gap — the reporter's
+profiles show these kernels as out-of-line leaves on clang/arm64, where v3.68
+had them inlined — can only be settled by an A/B on his Apple M5 Max, and this
+change deliberately does not pre-empt it. Nothing here is a performance claim.
+
+Two policy comment blocks in the same header contradicted each other: the older
+one instructed "Do NOT use SECP256K1_FE52_FORCE_INLINE (always_inline) here",
+which the shipped x86-64 default has contradicted since the inlining A/B. The
+older block now says what it is actually explaining and defers to the newer one,
+and the override documentation names the real requirement — the macro must hold
+the same value in every translation unit, because `FieldElement52::operator*` is
+an always_inline external-linkage inline whose body calls these kernels, so a
+mixed binary is an ODR mismatch rather than a diagnostic.
+
 ## 2026-09-06 — BIP-352 GPU coverage gap: an available backend that runs nothing
 
 From reviewing PR #384 (an outside contribution proposing a different fix for a

@@ -40,30 +40,23 @@ constexpr limbs4 ONE{1ULL, 0ULL, 0ULL, 0ULL};
 // 8-limb wide integer
 using wide8 = std::array<std::uint64_t, 8>;
 
-// CT-safe ge(): subtraction-chain, no data-dependent branches.
-// Matches field.cpp's ge() pattern. Although fast::Scalar is the
-// variable-time path, making ge() branchless eliminates secret-dependent
-// branch chains if any caller passes secret data (defense in depth).
-[[nodiscard]] bool ge(const limbs4& a, const limbs4& b) noexcept {
-    unsigned char borrow = 0;
-    for (std::size_t i = 0; i < 4; ++i) { sub64(a[i], b[i], borrow); }
-    return borrow == 0;  // no borrow → a >= b
-}
-
-// ge(x, ORDER), specialised. Same answer, same branchlessness, ~2.4x cheaper.
+// x >= ORDER, branchless. Replaces the generic four-limb ge(a, b) that used
+// to serve all nine call sites here; that function is gone, since every one of
+// them compared against ORDER and nothing else ever called it.
 //
-// ge() walks a borrow chain: four sbb instructions, each waiting on the carry
-// flag the previous one wrote. That serial dependency is the cost, and it is
-// paid by every caller even though ORDER is a compile-time constant with a
-// property that removes most of the work: ORDER[3] is 0xFFFF...FF, the largest
-// possible limb, so a[3] can never exceed it and the top limb needs only a "<"
-// test, never a ">".
+// The generic form walked a borrow chain: four sbb instructions, each waiting
+// on the carry flag the previous one wrote. That serial dependency was the
+// cost, and it was paid by every caller even though ORDER is a compile-time
+// constant with a property that removes most of the work: ORDER[3] is
+// 0xFFFF...FF, the largest possible limb, so a[3] can never exceed it and the
+// top limb needs only a "<" test, never a ">".
 //
 // So the comparison collapses to independent, order-free tests that the machine
 // issues in parallel, with `no`/`yes` carrying the lexicographic decision:
 // once a higher limb has settled the comparison, `no` masks every lower test.
-// No branches -- every term is a setcc, so this keeps ge()'s constant-time
-// property for the nonce-derived inputs that reach from_bytes.
+// Same answer, same branchlessness, ~2.4x cheaper. No branches -- every term is
+// a setcc -- so although fast::Scalar is the variable-time path, the constant-
+// time property survives for the nonce-derived inputs that reach from_bytes.
 [[nodiscard]] inline bool order_overflow(const limbs4& a) noexcept {
     int yes = 0;
     int no  = 0;

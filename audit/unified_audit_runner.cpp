@@ -744,6 +744,13 @@ int test_regression_metal_batch_sentinel_run(); // #347: dispatch failure is not
 int test_regression_opencl_collect_dispatch_run(); // #346: padded collect dispatch + checked queue sync
 int test_regression_p2sh_context_abi_run(); // #348: additive P2SH context diagnostics ABI
 
+// === CI contract regressions (source-coupled, no library dependency) ===
+// Both read a workflow file out of the checked-out tree and assert the
+// invariants that keep a mandatory job honest. They were on disk with a
+// _run() entry point but no ALL_MODULES row, which check_exploit_wiring.py
+// reports as unwired -- the exact drift that gate exists to catch.
+int test_shim_security_gate_policy_run();        // gate.yml shim-security step: report policy + executable scenarios
+int test_windows_cuda_workflow_contract_run();   // windows-cuda.yml: pinned toolkit, valid sub-packages, unmasked hook job
 // ============================================================================
 // Forward declarations -- 2026-05-22 SHIM-013: ecdsa_verify cache consistency
 // ============================================================================
@@ -1740,6 +1747,11 @@ static const AuditModule ALL_MODULES[] = {
     { "regression_opencl_collect_dispatch", "OpenCL ECDSA/Schnorr collect paths check kernel arguments and queue completion, use padded explicit-local dispatch, and retain bounds guards for ghost work-items (OCD-0..7)", "memory_safety", test_regression_opencl_collect_dispatch_run, false },
     // === 2026-07-21 P2SH context diagnostics ABI regression (#348) ===
     { "regression_p2sh_context_abi", "ufsecp_addr_p2sh_with_ctx provides context diagnostics while preserving the legacy ufsecp_addr_p2sh symbol and byte-identical output, including the zero-length edge (PCA-0..9 + PCA-5Z)", "memory_safety", test_regression_p2sh_context_abi_run, false },
+    // === CI contract regressions: the gate configuration is part of the
+    // security surface, so it is audited like any other invariant. Both are
+    // non-advisory: they read a file that always exists in a checked-out tree.
+    { "shim_security_gate_policy", "gate.yml's shim security regression step reconciles the runner exit code with advisory/non-advisory module results -- static contract plus the real extracted bash+python pipeline executed against synthetic audit reports", "security_gate", test_shim_security_gate_policy_run, false },
+    { "windows_cuda_workflow_contract", "windows-cuda.yml keeps the pinned CUDA toolkit revision, Windows-valid sub-packages, fail-fast toolchain diagnostics, outputs confined to out/windows-cuda, and the libbitcoin-direct hook job real and unmasked", "security_gate", test_windows_cuda_workflow_contract_run, false },
 };
 
 static constexpr int NUM_MODULES = sizeof(ALL_MODULES) / sizeof(ALL_MODULES[0]);

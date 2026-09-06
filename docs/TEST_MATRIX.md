@@ -57,7 +57,7 @@ lags behind the generated validation surfaces, prefer the generated counts.
 | `test_frost_kat.cpp` | -- | FROST t-of-n threshold signing known-answer tests |
 | `test_wycheproof_ecdsa.cpp` | -- | Wycheproof ECDSA: Google Project Wycheproof test vectors |
 | `test_wycheproof_ecdh.cpp` | -- | Wycheproof ECDH: Google Project Wycheproof test vectors |
-| `unified_audit_runner.cpp` | 462 modules (186 non-exploit + 276 exploit PoCs) | Unified audit: all current modules in single binary (includes GPU null-guard paths) |
+| `unified_audit_runner.cpp` | 467 modules (191 non-exploit + 276 exploit PoCs) | Unified audit: all current modules in single binary (includes GPU null-guard paths) |
 
 ### CPU Unit Tests (`src/cpu/tests/`)
 
@@ -106,14 +106,14 @@ lags behind the generated validation surfaces, prefer the generated counts.
 |------|---------|-------|
 | `opencl/tests/test_opencl.cpp` | OpenCL | Kernel correctness |
 | `opencl/tests/opencl_extended_test.cpp` | OpenCL | Extended operations |
-| `opencl/src/opencl_audit_runner.cpp` | OpenCL | Unified GPU audit ( 465 modules, 8 sections) |
+| `opencl/src/opencl_audit_runner.cpp` | OpenCL | Unified GPU audit ( 467 modules, 8 sections) |
 | `metal/tests/test_metal_host.cpp` | Metal | Metal shader correctness |
-| `metal/src/metal_audit_runner.mm` | Metal | `secp256k1_metal_audit`: unified GPU audit ( 465 modules, 8 sections) |
+| `metal/src/metal_audit_runner.mm` | Metal | `secp256k1_metal_audit`: unified GPU audit ( 467 modules, 8 sections) |
 | `src/cuda/src/test_ct_smoke.cu` | CUDA | CT smoke tests incl. ZK knowledge + DLEQ prove/verify (9 tests) |
 | `src/cuda/src/gpu_ct_leakage_probe.cu` | CUDA | Fixed-vs-random device-cycle Welch t-test on CT generator and signing kernels with JSON evidence output |
 | `src/cuda/src/test_suite.cu` | CUDA | `cuda_selftest`: kernel correctness, field + scalar + point ops |
 | `src/cuda/src/test_windows_macro_compat.cu` | CUDA/MSVC | `cuda_windows_macro_compat`: compile regression for Windows SDK `small` macro collisions in the public CUDA header |
-| `src/cuda/src/gpu_audit_runner.cu` | CUDA | `gpu_audit`: unified GPU audit ( 465 modules, 8 sections) |
+| `src/cuda/src/gpu_audit_runner.cu` | CUDA | `gpu_audit`: unified GPU audit ( 467 modules, 8 sections) |
 
 | `metal/app/metal_test.mm` | Metal | `secp256k1_metal_test`: shader correctness, compute pipeline |
 | `metal/app/bench_metal.mm` | Metal | `secp256k1_metal_bench_full`: comprehensive Metal benchmark |
@@ -481,6 +481,54 @@ columns without materializing a full preimage buffer:
   var_len>stride, preimage>4 MiB — every reject must fail closed with out32
   either untouched (pre-`clear_output_bytes`) or all-zero (post-clear)
   (section exploit_poc, advisory=false)
+
+### Generated Inventory Sync (2026-09-06)
+
+Active CTest targets that existed on disk but were absent from this matrix,
+plus the two CI-contract regressions wired into `unified_audit_runner` in the
+same pass:
+
+- `atomic_link_closure` — `src/cpu/tests/test_atomic_link_closure.cpp`:
+  libatomic transitive link-closure guard. Performs atomic operations wide
+  enough that GCC/Clang lower them to `__atomic_*` library calls
+  (`__atomic_is_lock_free`, `__atomic_compare_exchange` on a 16-byte payload)
+  and links only against the library target, so a missing libatomic in the
+  exported link interface fails at link time instead of in a downstream
+  consumer
+- `exploit_batch_weight_seed_binding` — `audit/test_exploit_batch_weight_seed_binding.cpp`:
+  Schnorr batch-verification soundness. The Bellare-Garay-Rabin small-exponents
+  argument requires the weights `a_i` to be sampled after and independently of
+  the signatures; this PoC attacks weight/seed binding directly (section
+  exploit_poc, advisory=false)
+- `regression_pippenger_window_bands` — `audit/test_regression_pippenger_window_bands.cpp`:
+  pins which MSM algorithm runs per size band at exactly the sizes
+  `schnorr_batch_verify` uses (n = 2N points). The 80..384 band moved from
+  c = 6 to c = 7, which switches the unsigned bucket path to the signed-digit
+  one; each band change has a silent failure mode that yields a well-formed
+  but wrong point (section math_invariants, advisory=false)
+- `regression_single_affine_materialisation` — `audit/test_regression_single_affine_materialisation.cpp`:
+  pins the equivalences that justify removing duplicate Z-inversions at call
+  sites that used to materialise the same point affine twice — a broken
+  equivalence changes serialised bytes silently, with no crash and no failing
+  arithmetic test (section math_invariants, advisory=false)
+- `regression_table_build_invariants` — `audit/test_regression_table_build_invariants.cpp`:
+  odd-multiple table construction. Asserts window-constant agreement between
+  `dual_scalar_mul_gen_point`'s recoding constant and the constant the tables
+  are sized from — independently written literals whose disagreement produces
+  a self-consistent wrong table (section math_invariants, advisory=false)
+- `shim_security_gate_policy` — `audit/test_shim_security_gate_policy.cpp`:
+  source-coupled contract for the "Run shim security regression modules" step
+  in `.github/workflows/gate.yml`. Layer 1 checks the YAML text; layer 2
+  extracts the step's `run:` script, swaps the runner invocation for a stub,
+  and executes the real bash+python pipeline against synthetic audit reports,
+  so advisory-only failures must not hard-fail and unexplained non-zero exits
+  must (section security_gate, advisory=false)
+- `windows_cuda_workflow_contract` — `audit/test_windows_cuda_workflow_contract.cpp`:
+  contract for `.github/workflows/windows-cuda.yml` — pinned toolkit revision
+  and version, Windows-valid sub-packages, fail-fast toolchain diagnostics,
+  outputs confined to `out/windows-cuda`, and the libbitcoin-direct hook job
+  kept real and unmasked. 15 live checks, each proven to have teeth by a
+  23-entry mutation battery (section security_gate, advisory=false)
 
 ---
 

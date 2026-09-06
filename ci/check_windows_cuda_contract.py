@@ -61,14 +61,21 @@ except ImportError as exc:  # Mandatory gate: an unavailable parser is a failure
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "windows-cuda.yml"
+# "crt" was required here between 2026-07-21 (a76fef55, "install Windows CUDA
+# CRT headers") and 2026-08-26, when 0c2082ec stabilised the workflow: it
+# pinned the toolkit to 12.8.1, dropped "crt", and added
+# audit/test_windows_cuda_workflow_contract.cpp, whose subpackages_valid_no_crt
+# check asserts "crt" is never listed. That commit did not update this gate, so
+# the two contracts contradicted each other and this one failed on every push
+# from then on. This gate now mirrors the C++ contract, which is the authority
+# (it runs inside the Windows job itself, before the toolkit is installed).
 REQUIRED_SUBPACKAGES = {
     "nvcc",
-    "crt",
     "cudart",
     "thrust",
     "visual_studio_integration",
 }
-INVALID_WINDOWS_SUBPACKAGES = {"cudart_dev"}
+INVALID_WINDOWS_SUBPACKAGES = {"cudart_dev", "crt"}
 REQUIRED_TARGETS = {"secp256k1_gpu_host", "secp256k1_cuda_lib"}
 
 

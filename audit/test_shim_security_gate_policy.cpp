@@ -22,10 +22,10 @@
 //
 // Layer 2 requires `bash` and `python3` on PATH; if either is unavailable
 // (e.g. a Windows/MSVC-only environment) the executable scenarios are
-// skipped with a notice and only layer 1 runs -- this file is not yet wired
-// into unified_audit_runner's advisory/non-advisory classification, so no
-// ADVISORY_SKIP_CODE convention applies here (see file-level note at the
-// bottom of this file about deferred wiring).
+// skipped with a notice and only layer 1 runs. Layer 1 is pure text analysis
+// over a file that always exists in a checked-out tree, so the module is
+// registered non-advisory and never returns ADVISORY_SKIP_CODE: losing
+// layer 2 narrows what is proven, it does not make the module inapplicable.
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -35,11 +35,22 @@
 #include <vector>
 
 #ifdef _WIN32
+#  include <process.h>
 #  define popen  _popen
 #  define pclose _pclose
 #else
 #  include <sys/wait.h>
+#  include <unistd.h>
 #endif
+
+// Current process id, spelled the same way on both platforms.
+static unsigned long long getpid_portable() {
+#ifdef _WIN32
+    return static_cast<unsigned long long>(_getpid());
+#else
+    return static_cast<unsigned long long>(::getpid());
+#endif
+}
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond, msg) do { \
@@ -55,12 +66,46 @@ const char* kNextStepMarker = "\n      - name:";
 const char* kRunnerInvocation =
     "./out/ci-shim/audit/unified_audit_runner --json-only --report-dir .";
 
+// Walk up from the current directory to find the repo-relative file. The
+// module is dispatched both by unified_audit_runner (run from the repo root)
+// and by its own CTest target (run from the build tree), so a bare relative
+// path only works in one of them.
+bool locate_repo_file(const std::string& rel_path, std::string& out_path) {
+    namespace fs = std::filesystem;
+    fs::path dir = fs::current_path();
+    for (int i = 0; i < 10; ++i) {
+        fs::path candidate = dir / rel_path;
+        std::error_code ec;
+        if (fs::exists(candidate, ec)) {
+            out_path = candidate.string();
+            return true;
+        }
+        fs::path parent = dir.parent_path();
+        if (parent.empty() || parent == dir) break;
+        dir = parent;
+    }
+    return false;
+}
+
+// CRLF -> LF: the ordering and step-boundary checks below match multi-line
+// anchors such as "\n      - name:", which a CRLF checkout (the default on
+// Windows runners) would never match after a binary read.
+std::string normalize_line_endings(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (size_t i = 0; i < raw.size(); ++i) {
+        if (raw[i] == '\r' && i + 1 < raw.size() && raw[i + 1] == '\n') continue;
+        out.push_back(raw[i]);
+    }
+    return out;
+}
+
 bool read_file(const std::string& path, std::string& out) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return false;
     std::ostringstream ss;
     ss << f.rdbuf();
-    out = ss.str();
+    out = normalize_line_endings(ss.str());
     return true;
 }
 
@@ -197,10 +242,17 @@ int test_shim_security_gate_policy_run() {
     printf("[shim-gate-report-policy] Contract checks against %s\n", kGateYmlPath);
     g_pass = g_fail = 0;
 
-    std::string gate_yml;
-    if (!read_file(kGateYmlPath, gate_yml)) {
-        printf("  FAIL [%s:%d] could not read %s (wrong cwd? test must run from repo root)\n",
+    std::string gate_yml_path;
+    if (!locate_repo_file(kGateYmlPath, gate_yml_path)) {
+        printf("  FAIL [%s:%d] could not locate %s from cwd or any of its 10 parents\n",
                __FILE__, __LINE__, kGateYmlPath);
+        return 1;
+    }
+
+    std::string gate_yml;
+    if (!read_file(gate_yml_path, gate_yml)) {
+        printf("  FAIL [%s:%d] could not read %s\n",
+               __FILE__, __LINE__, gate_yml_path.c_str());
         return 1;
     }
 
@@ -296,7 +348,14 @@ int test_shim_security_gate_policy_run() {
             CHECK(false, "gate.yml: could not extract+dedent the step's run script for executable checks");
         } else {
             namespace fs = std::filesystem;
-            fs::path scratch_root = fs::temp_directory_path() / "ufsecp_shim_gate_policy_test";
+            // Process-unique: this module now runs both as its own CTest
+            // target and inside unified_audit_runner (itself the `unified_audit`
+            // test), so under `ctest -j` two copies can be live at once. A
+            // shared scratch root would let one remove_all() the directory the
+            // other is still writing scenarios into.
+            fs::path scratch_root = fs::temp_directory_path() /
+                ("ufsecp_shim_gate_policy_test_" + std::to_string(
+                    static_cast<unsigned long long>(getpid_portable())));
             std::error_code ec;
             fs::create_directories(scratch_root, ec);
 
@@ -337,6 +396,6 @@ int test_shim_security_gate_policy_run() {
     return g_fail;
 }
 
-#if defined(STANDALONE_TEST) || !defined(UNIFIED_AUDIT_RUNNER)
+#ifdef STANDALONE_TEST
 int main() { return test_shim_security_gate_policy_run(); }
 #endif

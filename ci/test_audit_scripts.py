@@ -4434,7 +4434,7 @@ def check_windows_cuda_contract_fixtures() -> None:
                 "uses": "Jimver/cuda-toolkit@" + "a" * 40,
                 "with": {
                     "method": "network",
-                    "sub-packages": '["nvcc", "crt", "cudart", "thrust", "visual_studio_integration"]',
+                    "sub-packages": '["nvcc", "cudart", "thrust", "visual_studio_integration"]',
                 },
             },
             {
@@ -4450,21 +4450,41 @@ def check_windows_cuda_contract_fixtures() -> None:
     if mod.evaluate_document(clean):
         failures.append("complete Windows CUDA workflow was rejected")
 
-    linux_only_header_name = {
+    incomplete_packages = {
         "jobs": {"windows-cuda": {"steps": [dict(step) for step in clean["jobs"]["windows-cuda"]["steps"]]}},
     }
-    linux_only_header_name["jobs"]["windows-cuda"]["steps"][0] = {
+    incomplete_packages["jobs"]["windows-cuda"]["steps"][0] = {
         "uses": "Jimver/cuda-toolkit@" + "a" * 40,
         "with": {
             "method": "network",
-            "sub-packages": '["nvcc", "cudart", "cudart_dev", "thrust", "visual_studio_integration"]',
+            "sub-packages": '["nvcc", "thrust", "visual_studio_integration"]',
         },
     }
-    header_kinds = {p["kind"] for p in mod.evaluate_document(linux_only_header_name)}
-    if "cuda_subpackages_missing" not in header_kinds:
-        failures.append("missing Windows crt package did not fail")
-    if "cuda_subpackages_invalid_windows" not in header_kinds:
+    if not any(p["kind"] == "cuda_subpackages_missing"
+               for p in mod.evaluate_document(incomplete_packages)):
+        failures.append("dropped cudart package did not fail")
+
+    # cudart_dev is Linux-only; crt is rejected in lockstep with
+    # audit/test_windows_cuda_workflow_contract.cpp's subpackages_valid_no_crt,
+    # so the YAML gate and the in-job C++ contract cannot disagree again.
+    invalid_windows_packages = {
+        "jobs": {"windows-cuda": {"steps": [dict(step) for step in clean["jobs"]["windows-cuda"]["steps"]]}},
+    }
+    invalid_windows_packages["jobs"]["windows-cuda"]["steps"][0] = {
+        "uses": "Jimver/cuda-toolkit@" + "a" * 40,
+        "with": {
+            "method": "network",
+            "sub-packages": '["nvcc", "crt", "cudart", "cudart_dev", "thrust", "visual_studio_integration"]',
+        },
+    }
+    invalid_detail = [
+        p["detail"] for p in mod.evaluate_document(invalid_windows_packages)
+        if p["kind"] == "cuda_subpackages_invalid_windows"
+    ]
+    if not invalid_detail:
         failures.append("Linux-only cudart_dev package was accepted on Windows")
+    elif "crt" not in invalid_detail[0] or "cudart_dev" not in invalid_detail[0]:
+        failures.append(f"invalid-package report did not name both offenders: {invalid_detail[0]}")
 
     cpu_fallback = {
         "jobs": {"windows-cuda": {"steps": [dict(step) for step in clean["jobs"]["windows-cuda"]["steps"]]}},
@@ -4495,7 +4515,7 @@ def check_windows_cuda_contract_fixtures() -> None:
     if failures:
         fail(tag, "; ".join(failures))
     else:
-        ok(tag, "pinned parser dependency is present; wrong Windows header package, CPU fallback, and omitted CUDA targets fail; real workflow passes")
+        ok(tag, "pinned parser dependency is present; dropped required package, Windows-invalid crt/cudart_dev, CPU fallback, and omitted CUDA targets fail; real workflow passes")
 
 
 def check_version_header_contract_fixtures() -> None:

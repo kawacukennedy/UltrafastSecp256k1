@@ -1,5 +1,123 @@
 # Audit Changelog
 
+## 2026-09-06 — `dev` CI restored: two build breaks and three stale contracts
+
+Every required check on `dev` was red. Five independent causes, none of them a
+defect in the library's arithmetic or protocol behaviour.
+
+### The build break — a Scalar given a Point-only method
+
+`perf(cpu): in-place point ops at 54 self-assignment sites` (9e7d9d61) rewrote
+`X = X.op(Y)` to `X.op_inplace(Y)` across 54 call sites. Fifty-three of those
+targets are a `Point` or a `FieldElement`. One is not:
+
+```
+compat/libsecp256k1_shim/src/shim_musig.cpp:472
+-    if (g_neg) e->ctx.gacc = e->ctx.gacc.negate();
++    if (g_neg) e->ctx.gacc.negate_inplace();
+```
+
+`MuSig2KeyAggCtx::gacc` is a `fast::Scalar`, and `negate_inplace()` exists only
+on `Point`. `Scalar::negate()` is const and returns a value, so there is no
+in-place twin to substitute — the rewrite had no valid form at this site and the
+line does not compile. Reverted to the returning form.
+
+This single line is why **25 of the 31 red checks were red**: every leg that
+compiles the shim stopped at the same object file — all four `linux` matrix
+legs, `linux-arm64`, `linux-riscv64`, `macos`, `windows`, `windows-arm64-clang-cl`,
+`android`, `rocm`, `coverage`, all five Security Audit sanitizer legs, SonarCloud,
+Benchmark Dashboard, Performance Smoke and the BIP-340/341/327 conformance leg.
+Verified by a full local `-k 0` build (GCC 14.2.0, Release, CI flags): 1636/1636
+targets, 0 errors.
+
+### The second build break — a dead helper under -Werror
+
+`perf(cpu): close two of the three deficits against libsecp256k1 v0.8.0`
+(7365bb3e) replaced the generic four-limb `ge(a, b)` in `src/cpu/src/scalar.cpp`
+with a specialised `order_overflow(x)` at all nine call sites. Nothing else ever
+called `ge()`, so it became dead — invisible in an ordinary build, fatal in the
+one leg that compiles with `SECP256K1_WERROR=ON`:
+
+```
+src/cpu/src/scalar.cpp:47:20: error: 'bool secp256k1::fast::{anonymous}::ge(
+  const limbs4&, const limbs4&)' defined but not used [-Werror=unused-function]
+```
+
+This is why `Security Audit / Build with -Werror` failed 43 seconds in, before
+the shim was ever reached — a genuinely separate cause from the `shim_musig`
+break above, hidden behind it in every other leg. `ge()` is removed rather than
+marked `[[maybe_unused]]`: leaving an unreferenced comparison helper next to the
+one callers are meant to use invites the wrong one to be picked up later. Its
+reasoning — why the comparison is branchless, and what the borrow chain cost —
+is folded into `order_overflow`'s comment, which was already written as a
+comparison against it. `order_overflow` itself is pinned by
+`regression_scalar_reduce_and_safegcd_divstep`, which recomputes the reduction
+independently in base 256 and checks the n-1 / n / 2^256-1 boundary, so removing
+the orphan changes nothing that is not already covered.
+
+Local `-Werror` reproduction (g++-14, Release, `-DSECP256K1_MARCH=x86-64-v3`,
+tests/bench/examples off, exactly the CI configure): 46/46 targets, zero
+diagnostics.
+
+### The Windows CUDA contract failed for a line-ending reason
+
+`audit/test_windows_cuda_workflow_contract.cpp` reads `windows-cuda.yml` with
+`std::ios::binary` and matches multi-line anchors such as
+`"\n  windows-cuda:\n    name:"`. The hosted Windows runners check out with
+`core.autocrlf=true`, so the text it matched against contained CRLF and three
+mutation setups reported `pattern not found` — on Windows only, while the same
+test passed everywhere else. `read_file` now normalises CRLF to LF, and a new
+`crlf_normalisation` live check asserts a CRLF copy of the file reduces to
+exactly the LF text the anchors match, so the fix cannot silently rot.
+
+### Two contract checkers disagreed about `crt`
+
+`ci(windows): stabilize CUDA toolchain workflow` (0c2082ec) pinned the toolkit
+to 12.8.1, dropped `crt` from the installer sub-packages, and added the C++
+contract above — whose `subpackages_valid_no_crt` check asserts `crt` is never
+listed. It did not update `ci/check_windows_cuda_contract.py`, which still
+*required* `crt`. The two contracts were unsatisfiable together, so the Python
+gate failed on every push from 2026-08-26 on, taking Doc Gates, Preflight and
+the Fast CAAS Gates block with it. The Python gate now mirrors the C++ contract
+(`crt` moved from required to Windows-invalid, alongside `cudart_dev`), and the
+WIN-CUDA self-test fixtures were reworked: one fixture drops a genuinely
+required package, another lists both offenders and asserts the report names
+both.
+
+### Two audit modules were on disk but never dispatched
+
+`test_shim_security_gate_policy.cpp` and `test_windows_cuda_workflow_contract.cpp`
+each had a `_run()` entry point, no `ALL_MODULES[]` row, and no CMake target —
+exactly the drift `check_exploit_wiring.py` exists to catch. Both are now wired
+into the `security_gate` section (non-advisory), registered as standalone CTest
+targets, and documented in `TEST_MATRIX.md`. Two supporting fixes were needed:
+
+- `test_shim_security_gate_policy.cpp` guarded `main()` with
+  `#if defined(STANDALONE_TEST) || !defined(UNIFIED_AUDIT_RUNNER)`. That macro
+  is defined inside `unified_audit_runner.cpp` and therefore invisible to other
+  translation units, so linking it into the runner would have produced a second
+  `main`. Now `#ifdef STANDALONE_TEST`, like every other wired module.
+- It also read `.github/workflows/gate.yml` by bare relative path, which only
+  resolves from the repo root. It now walks up from the working directory, as
+  the CUDA contract already did — proven by running the standalone binary from
+  the build tree.
+- Its layer-2 scratch directory was a fixed `/tmp` path. That was safe while the
+  module ran alone; it is not once the same code runs both as its own CTest
+  target and inside `unified_audit_runner` (the `unified_audit` test), because
+  `ctest -j` can have two copies live and one `remove_all()`s the tree the other
+  is writing into. The root is now process-unique — four concurrent runs pass.
+
+Both dispatch and pass under the runner: `security_gate` 3/3.
+
+### Stale generated counts
+
+`ALL_MODULES[]` grew (465 → 467 with the two wired modules) and five active
+CTest targets — `atomic_link_closure`, `exploit_batch_weight_seed_binding`,
+`regression_pippenger_window_bands`, `regression_single_affine_materialisation`,
+`regression_table_build_invariants` — had never been added to `TEST_MATRIX.md`.
+Assurance validation and the canonical-count gates were reporting real drift.
+Documented and resynced via `ci/sync_all_docs.py`; no count was edited by hand.
+
 ## 2026-09-03 — Two documentation defects closed (#397, #398)
 
 Both were filed against comments that say something the code does not do. Both

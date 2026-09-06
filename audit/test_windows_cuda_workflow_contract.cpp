@@ -41,12 +41,40 @@ bool locate_workflow_file(std::string& out_path) {
     return false;
 }
 
+// CRLF -> LF. The checks and the mutation battery below match multi-line
+// anchors such as "\n  windows-cuda:\n    name:". A Windows checkout with
+// core.autocrlf=true (the default on the hosted windows runners) stores the
+// file with CRLF, and a binary read preserves those, so every multi-line
+// anchor silently missed and the mutation setup reported "pattern not found"
+// -- the contract failed on Windows for a line-ending reason while passing
+// everywhere else. Normalising makes the contract line-ending agnostic
+// without weakening any check. Proven by the crlf_normalisation live check.
+std::string normalize_line_endings(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (size_t i = 0; i < raw.size(); ++i) {
+        if (raw[i] == '\r' && i + 1 < raw.size() && raw[i + 1] == '\n') continue;
+        out.push_back(raw[i]);
+    }
+    return out;
+}
+
+std::string to_crlf(const std::string& lf) {
+    std::string out;
+    out.reserve(lf.size() + lf.size() / 32 + 1);
+    for (char c : lf) {
+        if (c == '\n') out.push_back('\r');
+        out.push_back(c);
+    }
+    return out;
+}
+
 bool read_file(const std::string& path, std::string& out) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return false;
     std::ostringstream ss;
     ss << f.rdbuf();
-    out = ss.str();
+    out = normalize_line_endings(ss.str());
     return true;
 }
 
@@ -316,6 +344,16 @@ int test_windows_cuda_workflow_contract_run() {
     }
 
     int failures = 0;
+
+    // Line-ending independence. The anchors below span lines, so a CRLF
+    // checkout must reduce to exactly the same text a LF checkout produces --
+    // otherwise every multi-line check silently degrades into "pattern not
+    // found" on Windows only (the failure this check exists to prevent).
+    if (normalize_line_endings(to_crlf(text)) != text) {
+        std::cerr << "[windows-cuda-workflow-contract] FAIL(live): crlf_normalisation -- "
+                     "a CRLF checkout does not normalise to the LF text the checks match against\n";
+        ++failures;
+    }
 
     std::vector<Check> live_checks = validate_workflow_contract(text);
     for (const auto& c : live_checks) {

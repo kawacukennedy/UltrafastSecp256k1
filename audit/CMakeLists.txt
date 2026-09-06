@@ -1409,6 +1409,21 @@ target_compile_definitions(test_regression_inplace_point_ops_standalone PRIVATE 
 add_test(NAME regression_inplace_point_ops COMMAND test_regression_inplace_point_ops_standalone)
 set_tests_properties(regression_inplace_point_ops PROPERTIES TIMEOUT 120 LABELS "audit;regression;group_law;inplace")
 
+# CI workflow contract regressions. Both locate their workflow file by walking
+# up from the working directory, so they run correctly from the build tree as
+# well as from the repo root where unified_audit_runner dispatches them.
+add_executable(test_shim_security_gate_policy_standalone test_shim_security_gate_policy.cpp)
+audit_target_defaults(test_shim_security_gate_policy_standalone)
+target_compile_definitions(test_shim_security_gate_policy_standalone PRIVATE STANDALONE_TEST)
+add_test(NAME shim_security_gate_policy COMMAND test_shim_security_gate_policy_standalone)
+set_tests_properties(shim_security_gate_policy PROPERTIES TIMEOUT 300 LABELS "audit;regression;ci_contract;shim")
+
+add_executable(test_windows_cuda_workflow_contract_standalone test_windows_cuda_workflow_contract.cpp)
+audit_target_defaults(test_windows_cuda_workflow_contract_standalone)
+target_compile_definitions(test_windows_cuda_workflow_contract_standalone PRIVATE STANDALONE_TEST)
+add_test(NAME windows_cuda_workflow_contract COMMAND test_windows_cuda_workflow_contract_standalone)
+set_tests_properties(windows_cuda_workflow_contract PROPERTIES TIMEOUT 120 LABELS "audit;regression;ci_contract;cuda")
+
 add_executable(test_regression_scalar_reduce_and_safegcd_divstep_standalone test_regression_scalar_reduce_and_safegcd_divstep.cpp)
 audit_target_defaults(test_regression_scalar_reduce_and_safegcd_divstep_standalone)
 target_compile_definitions(test_regression_scalar_reduce_and_safegcd_divstep_standalone PRIVATE STANDALONE_TEST)
@@ -3955,6 +3970,8 @@ add_executable(unified_audit_runner
     test_regression_scalar_decomposition_and_comb.cpp
     test_regression_pippenger_window_bands.cpp
     test_regression_inplace_point_ops.cpp
+    test_shim_security_gate_policy.cpp
+    test_windows_cuda_workflow_contract.cpp
     test_regression_scalar_reduce_and_safegcd_divstep.cpp
     test_exploit_batch_verify_correctness.cpp
     test_exploit_batch_verify_poison.cpp

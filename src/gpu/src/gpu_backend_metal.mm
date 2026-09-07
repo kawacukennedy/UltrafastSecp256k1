@@ -3033,7 +3033,24 @@ private:
                 clear_error();
                 return GpuError::Ok;
             }
+            // Name the file. MetalRuntime prints only "Failed to load metallib:
+            // library not found", which does not say WHICH candidate existed and
+            // was rejected -- and with the exists() probe above, exactly one
+            // error line means exactly one candidate was on disk. Knowing which
+            // one is the difference between "the build-tree path is not compiled
+            // in" and "the device rejects the metallib we built".
+            std::fprintf(stderr, "[Metal] ERROR: candidate rejected: %s\n", cand.c_str());
         }
+        std::fprintf(stderr,
+                     "[Metal] ERROR: no metallib loaded from %zu candidate(s); "
+                     "build-tree path %s\n",
+                     candidates.size(),
+#ifdef UFSECP_METAL_METALLIB_DIR
+                     "compiled in: " UFSECP_METAL_METALLIB_DIR
+#else
+                     "NOT compiled in (UFSECP_METAL_METALLIB_DIR undefined)"
+#endif
+        );
 
         /* Fallback: compile shader source at runtime */
         std::vector<std::string> shader_dirs;

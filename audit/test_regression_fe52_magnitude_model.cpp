@@ -59,7 +59,18 @@ static int g_pass = 0, g_fail = 0;
 #define ADVISORY_SKIP_CODE 77
 #endif
 
-#if defined(SECP256K1_FAST_52BIT)
+// FE52 COMPUTE, not FE52 STORAGE.
+//
+// SECP256K1_FAST_52BIT means Point STORES its coordinates as 5x52. That is the
+// condition for FMM-4/FMM-5, which read live Point coordinates -- but not for
+// FMM-1/2/3, which exercise the FE52 kernels themselves. MSVC x64 cl has no
+// __int128, so it keeps 4x64 Point storage while still running the 5x52
+// kernels as the ecmult compute path via u128_compat (see config.hpp:43-60).
+// Guarding the whole module on the storage macro therefore made it return
+// ADVISORY_SKIP_CODE on `CI / windows (Release)` -- where it is registered
+// advisory=false, so the runner counted that as a FAIL -- while the kernels the
+// first three groups test were compiled and live on that very build.
+#if defined(SECP256K1_FE52_COMPUTE)
 
 using secp256k1::fast::FieldElement52;
 using secp256k1::fast::Point;
@@ -220,8 +231,20 @@ void test_kernel_postconditions() {
 void test_declared_bounds_are_honest() {
     std::printf("[FMM-3] the declared negate() bounds survive every magnitude they admit\n");
 
-    for (unsigned declared : {secp256k1::fast::GEJ_Y_MAGNITUDE_MAX,
-                              secp256k1::fast::GEJ_X_MAGNITUDE_MAX}) {
+    // The bounds point.cpp's negate() call sites actually pass. Where Point
+    // stores 5x52 these are the declared constants and the static_asserts below
+    // pin that this list has not drifted from them; where it does not (MSVC),
+    // the kernel property under test is the same one and the literals keep this
+    // group running instead of vacuously skipping.
+    constexpr unsigned kDeclaredY = 4;
+    constexpr unsigned kDeclaredX = 8;
+#if defined(SECP256K1_FAST_52BIT)
+    static_assert(kDeclaredY == secp256k1::fast::GEJ_Y_MAGNITUDE_MAX,
+                  "FMM-3's Y bound drifted from GEJ_Y_MAGNITUDE_MAX");
+    static_assert(kDeclaredX == secp256k1::fast::GEJ_X_MAGNITUDE_MAX,
+                  "FMM-3's X bound drifted from GEJ_X_MAGNITUDE_MAX");
+#endif
+    for (unsigned declared : {kDeclaredY, kDeclaredX}) {
         unsigned const first_bad = first_corrupting_magnitude(declared, /*ceiling=*/64, /*trials=*/400);
         char msg[192];
         std::snprintf(msg, sizeof msg,
@@ -233,6 +256,10 @@ void test_declared_bounds_are_honest() {
                     declared, first_bad ? first_bad - 1 : 64u, first_bad);
     }
 }
+
+// FMM-4 and FMM-5 read live Point coordinates as FieldElement52, so they need
+// FE52 STORAGE, not just FE52 compute.
+#if defined(SECP256K1_FAST_52BIT)
 
 // -- FMM-4 -----------------------------------------------------------------
 void test_live_formulas_within_declared_bounds() {
@@ -321,6 +348,8 @@ void test_the_near_miss_is_caught_and_is_real() {
           "control: the magnitude-3 steady state the live formulas reach corrupts nothing");
 }
 
+#endif  // SECP256K1_FAST_52BIT (FMM-4/FMM-5)
+
 }  // namespace
 
 int test_regression_fe52_magnitude_model_run() {
@@ -329,23 +358,32 @@ int test_regression_fe52_magnitude_model_run() {
     test_model_classification();
     test_kernel_postconditions();
     test_declared_bounds_are_honest();
+#if defined(SECP256K1_FAST_52BIT)
     test_live_formulas_within_declared_bounds();
     test_the_near_miss_is_caught_and_is_real();
+#else
+    std::printf("[FMM-4/5] not applicable: this build computes with the 5x52 kernels "
+                "but STORES Point coordinates as 4x64 (MSVC x64 cl, no __int128), so "
+                "there are no live FE52 point coordinates to measure. FMM-1..3 above "
+                "exercised the same kernels this build actually runs.\n");
+#endif
     std::printf("[fe52_magnitude_model] %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }
 
-#else  // !SECP256K1_FAST_52BIT
+#else  // !SECP256K1_FE52_COMPUTE
 
-// The 4x64 FieldElement path has no magnitude parameter at all --
-// FieldElement::negate ignores it -- so there is no model to check here. This
-// is a genuine inapplicability, not a skipped check.
+// No 5x52 kernels in this build at all (ESP32 / STM32 / wasm: no __int128 and
+// u128_compat is too slow there). The 4x64 FieldElement path has no magnitude
+// parameter -- FieldElement::negate ignores it -- so there is nothing to model.
+// A genuine inapplicability, not a skipped check.
 int test_regression_fe52_magnitude_model_run() {
-    std::printf("[fe52_magnitude_model] SKIP: 5x52 field representation not built\n");
+    std::printf("[fe52_magnitude_model] SKIP: the 5x52 kernels are not built on "
+                "this platform (no __int128, no MSVC x64 u128_compat)\n");
     return ADVISORY_SKIP_CODE;
 }
 
-#endif  // SECP256K1_FAST_52BIT
+#endif  // SECP256K1_FE52_COMPUTE
 
 #ifdef STANDALONE_TEST
 int main() { return test_regression_fe52_magnitude_model_run(); }

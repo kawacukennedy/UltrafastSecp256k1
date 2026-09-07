@@ -1,5 +1,56 @@
 # Audit Changelog
 
+## 2026-09-07 — Three unified_audit modules failed on Windows for reasons that were not about the code
+
+`CI / windows (Release)` reported `unified_audit` at 412/466 with 5 blocking
+failures. Two were the POSIX-path assertions fixed in `0edf85f6`. The other
+three each hit a platform assumption in the module itself and reported it as a
+security failure.
+
+**`fe52_magnitude_model` returned ADVISORY_SKIP_CODE and was counted as a FAIL.**
+The whole module was gated on `SECP256K1_FAST_52BIT`, which means Point *stores*
+5x52 coordinates. MSVC x64 cl has no `__int128`, so it keeps 4x64 Point storage
+while still running the 5x52 kernels as the ecmult compute path via
+`u128_compat` (`config.hpp:43-60`). FMM-1/2/3 test those kernels and were live
+on that build; only FMM-4/5, which read live Point coordinates, need the storage
+macro. The module now splits on `SECP256K1_FE52_COMPUTE` vs
+`SECP256K1_FAST_52BIT`: 42 checks where Point stores 5x52, **31 real checks**
+where it does not, and the advisory skip reserved for platforms with no 5x52
+kernels at all (ESP32/STM32/wasm). FMM-3's bounds are literals with a
+`static_assert` pinning them to `GEJ_{X,Y}_MAGNITUDE_MAX` wherever those exist,
+so the group keeps running without silently drifting from the constants.
+Verified by compiling the module with the storage guard forced off, reproducing
+the MSVC shape on this host: 31 passed, 0 failed, rc=0.
+
+**`opencl_bip352_faultinject_symbols_absent` had no Windows branch at all.**
+`self_exe_path()` handled `__linux__` and `__APPLE__` and returned `{}`
+otherwise, so SAS-2/SAS-3 could never run, `g_checked_something` stayed 0, and
+the module returned `ADVISORY_SKIP_CODE` — a FAIL for an `advisory=false`
+module. Added the `GetModuleFileNameA` branch, and fixed the shell quoting the
+`nm` invocations use (`'...'` is not quoting in cmd.exe, so even with a path
+they would have failed).
+
+More importantly, the module now has a floor that needs no toolchain: **SAS-1**
+reads `src/gpu/src/gpu_backend_opencl.cpp` through `audit_read_source_file()`
+and asserts that every mention of all four hook symbols falls inside the
+`SECP256K1_BUILD_FAULT_INJECTION_TESTS` guard. `nm` asks the stronger question
+and stays primary; SAS-1 makes sure the module never executes zero checks.
+Proof it blocks: adding a hook-symbol mention immediately *before* the guard
+opens turns `Result: PASS` into `FAIL [test_hook_definitions_are_macro_gated]`.
+
+**`gpu_bip352_scan` looked for `cl` on PATH.** SW-BIP352-SCANONLY preprocesses
+`secp256k1_extended.h` with and without `-DSECP256K1_METAL_SCAN_ONLY`. The
+Windows job runs ctest from a plain shell, not a Developer Command Prompt, so
+`cl` is not on PATH and the single hard-coded command could never succeed. It
+now tries `cl`, `clang-cl`, `clang++`, `g++`, `cc` in turn and reports which one
+ran; when none is available it emits a visible `SKIP` naming the missing tool
+instead of a `FAIL`. Verified both ways on Linux: `preprocessor: cc` with 9
+checks passing, and with an emptied PATH the SKIP line with the module still at
+0 failures.
+
+Full runner from `/tmp` after all three: **AUDIT-READY, 417/468, ALL PASSED,
+0 blocking failures**.
+
 ## 2026-09-07 — RFC 6979 HMAC length guards get the test their fix shipped without
 
 `d2544fc8` made `HMAC_Ctx::compute_short`, `::compute_two_block` and

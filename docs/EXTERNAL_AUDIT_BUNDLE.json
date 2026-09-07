@@ -200,7 +200,7 @@
           {
             "findings": [
               {
-                "message": "2 files modified/deleted since graph build (2026-09-07T03:34:24)",
+                "message": "2 files modified/deleted since graph build (2026-09-07T04:12:53)",
                 "severity": "WARN"
               },
               {
@@ -392,7 +392,7 @@
           {
             "findings": [
               {
-                "message": "8 changed files have matching docs",
+                "message": "3 changed files have matching docs",
                 "severity": "PASS"
               }
             ],
@@ -402,11 +402,11 @@
           {
             "findings": [
               {
-                "message": "Mutation report age: 145.8 days (threshold: 14)",
+                "message": "Mutation report age: 145.9 days (threshold: 14)",
                 "severity": "INFO"
               },
               {
-                "message": "Mutation report is stale (145.8 > 14 days) \u2014 rerun recommended",
+                "message": "Mutation report is stale (145.9 > 14 days) \u2014 rerun recommended",
                 "severity": "WARN"
               }
             ],
@@ -818,11 +818,11 @@
           "value": {
             "dirty": true,
             "ref": "dev",
-            "sha": "93026b8e20021713b00149de45c544b32dda386d",
-            "short": "93026b8e20"
+            "sha": "95b73df22e42a02c809399fca529af546580f410",
+            "short": "95b73df22e"
           }
         },
-        "generated_at": "2026-09-07T03:41:29.578243+00:00",
+        "generated_at": "2026-09-07T04:20:44.407073+00:00",
         "platform": "Linux",
         "provenance": {
           "build_flags": {
@@ -839,12 +839,12 @@
             },
             "flags_hash": "93f0268349a55f05"
           },
-          "collected_at": "2026-09-07T03:41:29.578181+00:00",
+          "collected_at": "2026-09-07T04:20:44.407031+00:00",
           "git": {
             "dirty": true,
             "ref": "dev",
-            "sha": "93026b8e20021713b00149de45c544b32dda386d",
-            "short": "93026b8e20"
+            "sha": "95b73df22e42a02c809399fca529af546580f410",
+            "short": "95b73df22e"
           },
           "platform": {
             "machine": "x86_64",
@@ -865,7 +865,7 @@
           },
           "version": "4.5.0"
         },
-        "run_id": "audit_gate-93026b8e20-20260907T034129",
+        "run_id": "audit_gate-95b73df22e-20260907T042044",
         "runner": "audit_gate",
         "schema_version": "1.0.0",
         "sections": [
@@ -1020,7 +1020,7 @@
               {
                 "check_id": "p6__graph_freshness",
                 "severity": "advisory:medium",
-                "title": "2 files modified/deleted since graph build (2026-09-07T03:34:24)"
+                "title": "2 files modified/deleted since graph build (2026-09-07T04:12:53)"
               },
               {
                 "check_id": "p6__graph_freshness",
@@ -1254,7 +1254,7 @@
               {
                 "check_id": "p10__doc-code_pairing",
                 "severity": "pass",
-                "title": "8 changed files have matching docs"
+                "title": "3 changed files have matching docs"
               }
             ],
             "name": "P10: Doc-Code Pairing",
@@ -1265,12 +1265,12 @@
               {
                 "check_id": "p2__mutation_evidence_freshness",
                 "severity": "info",
-                "title": "Mutation report age: 145.8 days (threshold: 14)"
+                "title": "Mutation report age: 145.9 days (threshold: 14)"
               },
               {
                 "check_id": "p2__mutation_evidence_freshness",
                 "severity": "advisory:medium",
-                "title": "Mutation report is stale (145.8 > 14 days) \u2014 rerun recommended"
+                "title": "Mutation report is stale (145.9 > 14 days) \u2014 rerun recommended"
               }
             ],
             "name": "P2: Mutation Evidence Freshness",
@@ -1763,8 +1763,8 @@
       "passing": true,
       "required": true,
       "returncode": 0,
-      "stderr_sha256": "6bdea60edcf472f54b493198142af1c37a6da0312459117b7f3d257f3ea78a35",
-      "stdout_sha256": "67d9004aca1acaaaaa4a380194382815c8a503d4d328015a0af8df3a3d3961d0"
+      "stderr_sha256": "a2502a7464c45f97f4390a0e346f0dfe1fd41db3e7766db5a32b6fae921eac5f",
+      "stdout_sha256": "e9f0f714310ceb44928d6e653ba5379c859b5801f3f62df011ec4094b6eef77b"
     },
     {
       "name": "audit_gap_report_strict",
@@ -2066,13 +2066,13 @@
         "gates_skipped": 0,
         "gates_total": 8,
         "overall_pass": true,
-        "timestamp": "2026-09-07T03:41:33.237812+00:00"
+        "timestamp": "2026-09-07T04:20:48.136520+00:00"
       },
       "passing": true,
       "required": true,
       "returncode": 0,
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "stdout_sha256": "5b66fa6dad2be7564f3d18b96fd01865ae5b27521c92384ecdeaae3ed74bd33a"
+      "stdout_sha256": "27e730075600a9b3ffb0a87725dec5a7822303d60667ea99571a005fdfc7b9e2"
     },
     {
       "name": "supply_chain_gate",
@@ -2118,19 +2118,19 @@
         "checks_total": 5,
         "failing_checks": [],
         "overall_pass": true,
-        "timestamp": "2026-09-07T03:41:33.347754+00:00"
+        "timestamp": "2026-09-07T04:20:48.246845+00:00"
       },
       "passing": true,
       "required": true,
       "returncode": 0,
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "stdout_sha256": "ee7773ba7f1b1dcf99fd35ced1b4c7b3839e84044786412e929323efe9c44f1e"
+      "stdout_sha256": "ba09772af772f6e360de14ff82873a6ceac93228da3eb5afbbaa330afb0f9a77"
     }
   ],
-  "generated_at": "2026-09-07T03:41:33.364839+00:00",
+  "generated_at": "2026-09-07T04:20:48.262498+00:00",
   "git": {
     "branch": "dev",
-    "commit": "93026b8e20021713b00149de45c544b32dda386d",
+    "commit": "95b73df22e42a02c809399fca529af546580f410",
     "dirty": true
   },
   "repo_root": "/home/shrek/Secp256k1/Secp256K1fast/libs/UltrafastSecp256k1",

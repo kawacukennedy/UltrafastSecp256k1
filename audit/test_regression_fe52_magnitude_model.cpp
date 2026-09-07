@@ -148,6 +148,24 @@ unsigned first_corrupting_magnitude(unsigned declared, unsigned ceiling, int tri
     return 0;
 }
 
+// The magnitudes point.cpp's negate() call sites actually pass.
+//
+// Literals, not secp256k1::fast::GEJ_*_MAGNITUDE_MAX, because those constants
+// are declared inside point.hpp's `#if defined(SECP256K1_FAST_52BIT)` -- FE52
+// STORAGE -- and this region is compiled whenever the FE52 KERNELS exist. On
+// MSVC x64 cl the kernels exist and the storage does not, so referring to the
+// constants here does not compile there (C2039/C2065, caught by the Windows
+// benchmark build). The static_asserts pin these literals to the declared
+// constants wherever the declarations do exist, so the two cannot drift.
+constexpr unsigned kDeclaredY = 4;
+constexpr unsigned kDeclaredX = 8;
+#if defined(SECP256K1_FAST_52BIT)
+static_assert(kDeclaredY == secp256k1::fast::GEJ_Y_MAGNITUDE_MAX,
+              "FMM's Y bound drifted from GEJ_Y_MAGNITUDE_MAX");
+static_assert(kDeclaredX == secp256k1::fast::GEJ_X_MAGNITUDE_MAX,
+              "FMM's X bound drifted from GEJ_X_MAGNITUDE_MAX");
+#endif
+
 // -- FMM-1 -----------------------------------------------------------------
 void test_model_classification() {
     std::printf("[FMM-1] magnitude_of / magnitude_ok classification\n");
@@ -185,8 +203,8 @@ void test_model_classification() {
     wrapped.n[0] = ~std::uint64_t{0};
     CHECK(magnitude_of(wrapped.n) > 4000,
           "a wrapped (near-2^64) limb reports a magnitude far above any legal bound");
-    CHECK(!magnitude_ok(wrapped.n, secp256k1::fast::GEJ_X_MAGNITUDE_MAX),
-          "a wrapped limb violates GEJ_X_MAGNITUDE_MAX");
+    CHECK(!magnitude_ok(wrapped.n, kDeclaredX),
+          "a wrapped limb violates the declared X bound (GEJ_X_MAGNITUDE_MAX = 8)");
 }
 
 // -- FMM-2 -----------------------------------------------------------------
@@ -231,19 +249,6 @@ void test_kernel_postconditions() {
 void test_declared_bounds_are_honest() {
     std::printf("[FMM-3] the declared negate() bounds survive every magnitude they admit\n");
 
-    // The bounds point.cpp's negate() call sites actually pass. Where Point
-    // stores 5x52 these are the declared constants and the static_asserts below
-    // pin that this list has not drifted from them; where it does not (MSVC),
-    // the kernel property under test is the same one and the literals keep this
-    // group running instead of vacuously skipping.
-    constexpr unsigned kDeclaredY = 4;
-    constexpr unsigned kDeclaredX = 8;
-#if defined(SECP256K1_FAST_52BIT)
-    static_assert(kDeclaredY == secp256k1::fast::GEJ_Y_MAGNITUDE_MAX,
-                  "FMM-3's Y bound drifted from GEJ_Y_MAGNITUDE_MAX");
-    static_assert(kDeclaredX == secp256k1::fast::GEJ_X_MAGNITUDE_MAX,
-                  "FMM-3's X bound drifted from GEJ_X_MAGNITUDE_MAX");
-#endif
     for (unsigned declared : {kDeclaredY, kDeclaredX}) {
         unsigned const first_bad = first_corrupting_magnitude(declared, /*ceiling=*/64, /*trials=*/400);
         char msg[192];

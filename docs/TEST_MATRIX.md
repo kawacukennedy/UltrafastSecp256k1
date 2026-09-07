@@ -57,7 +57,7 @@ lags behind the generated validation surfaces, prefer the generated counts.
 | `test_frost_kat.cpp` | -- | FROST t-of-n threshold signing known-answer tests |
 | `test_wycheproof_ecdsa.cpp` | -- | Wycheproof ECDSA: Google Project Wycheproof test vectors |
 | `test_wycheproof_ecdh.cpp` | -- | Wycheproof ECDH: Google Project Wycheproof test vectors |
-| `unified_audit_runner.cpp` | 468 modules (192 non-exploit + 276 exploit PoCs) | Unified audit: all current modules in single binary (includes GPU null-guard paths) |
+| `unified_audit_runner.cpp` | 469 modules (193 non-exploit + 276 exploit PoCs) | Unified audit: all current modules in single binary (includes GPU null-guard paths) |
 
 ### CPU Unit Tests (`src/cpu/tests/`)
 
@@ -1141,3 +1141,18 @@ ctest --test-dir build-audit -R "exploit" --output-on-failure
 | `regression_shim_rfc6979_compat` | `audit/test_regression_shim_rfc6979_compat.cpp` | SHIM-P3-006: rfc6979_nonce_libsecp_compat determinism + signing correctness — same inputs same nonce, NULL vs non-NULL ndata differ, ecdsa_sign_libsecp_compat verifies (RFC-1..9); advisory=false |
 | `regression_shim_divergence_fixes` | `audit/test_regression_shim_divergence_fixes.cpp` | ILLCB-001/002: pubkey_parse NULL args fire illegal_cb; DER-STRICT: r=0/s=0 accepted at parse; keypair_sec BIP-340: stored sk produces even-Y pubkey (SDF-1..6); advisory=true |
 | `regression_shim_tweak_recover_null_cb` | `audit/test_regression_shim_tweak_recover_null_cb.cpp` | TRNC-1..4: xonly_pubkey_tweak_add, tweak_add_check, keypair_xonly_tweak_add, recoverable_sig_convert fire illegal_callback on NULL non-ctx args (SHIM-NULL-CB-2026); advisory=true |
+
+### Generated Inventory Sync (2026-09-07)
+
+- `regression_hmac_guard_fail_closed` — `audit/test_regression_hmac_guard_fail_closed.cpp`:
+  pins that the three RFC 6979 HMAC helpers in `src/cpu/src/ecdsa.cpp`
+  (`compute_short`, `compute_two_block`, `compute_three_block`) zero their
+  32-byte output in the same statement they return from on a length-precondition
+  violation, instead of returning with the caller's stack bytes readable as an
+  HMAC — the fix `d2544fc8` made and shipped without a test. Also pins that
+  `init_zero_key32`'s process-lifetime midstate is computed by
+  `init_key32(ZERO_KEY32)` rather than transcribed from a table. Source scan by
+  necessity: `HMAC_Ctx` is in an anonymous namespace with no header and no ABI
+  entry point, and every production caller passes a compile-time-fixed length,
+  so the guarded branch is unreachable from any test translation unit
+  (section ct_analysis, advisory=false)

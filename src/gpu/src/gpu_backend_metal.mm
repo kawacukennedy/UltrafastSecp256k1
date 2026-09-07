@@ -2937,6 +2937,13 @@ private:
             "../metal/secp256k1_kernels.metallib",
             "../../metal/secp256k1_kernels.metallib",
             "../../../metal/secp256k1_kernels.metallib",
+            // The in-tree build puts it in <build>/src/metal, which none of the
+            // candidates above spells -- they all assume a <build>/metal. A
+            // binary run from <build>/audit or <build>/src/cpu therefore missed
+            // it entirely. Additive: these are tried only after every path that
+            // resolved before, so nothing that used to load changes.
+            "../src/metal/secp256k1_kernels.metallib",
+            "../../src/metal/secp256k1_kernels.metallib",
             nullptr
         };
 

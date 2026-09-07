@@ -244,6 +244,31 @@ if(METAL_COMPILER)
             $<TARGET_FILE_DIR:metal_audit_runner>/secp256k1_kernels.metallib
         COMMENT "[Metal] Copying metallib to audit runner directory"
     )
+
+    # The CPU audit binaries -- unified_audit_runner and ~500 standalone CTest
+    # targets -- live in ${CMAKE_BINARY_DIR}/audit, and ctest runs them from
+    # that directory. The three copies above all land in
+    # ${CMAKE_BINARY_DIR}/src/metal (that is where the metal_* targets are), and
+    # none of gpu_backend_metal.mm's CWD-relative candidates
+    # ("secp256k1_kernels.metallib", "../…", "../metal/…", "../../metal/…")
+    # reaches across from audit/ to src/metal/. So every Metal-backed audit
+    # module failed with "[Metal] ERROR: Failed to load metallib: library not
+    # found" -- on CI / macos (Release) that is gpu_abi_gate, unified_audit and
+    # regression_bip352_ct_varbase, all three reporting GPU failures for a
+    # missing file rather than for anything about the GPU.
+    #
+    # Attached to metal_shaders rather than to an audit target because
+    # add_custom_command(TARGET) requires the target to be defined in this
+    # directory, and audit/ is a sibling added later (CMakeLists.txt:772).
+    # make_directory first: this runs whether or not audit/ was configured
+    # (it is gated on SECP256K1_BUILD_CPU AND BUILD_TESTING).
+    add_custom_command(TARGET metal_shaders POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/audit
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${METAL_LIB}
+            ${CMAKE_BINARY_DIR}/audit/secp256k1_kernels.metallib
+        COMMENT "[Metal] Copying metallib to the CPU audit binary directory"
+    )
 else()
     message(WARNING "secp256k1-metal: 'xcrun' not found; shaders must be compiled at runtime")
 endif()

@@ -1,5 +1,39 @@
 # Audit Changelog
 
+## 2026-09-07 — macOS: three GPU audit modules failed on a missing file, not on the GPU
+
+`CI / macos (Release)` reported `gpu_abi_gate`, `unified_audit` and
+`regression_bip352_ct_varbase` as failures, with GPU BIP-352 scans returning
+non-OK. The cause was one line in the log:
+
+```
+[Metal] ERROR: Failed to load metallib: library not found
+```
+
+`src/metal/CMakeLists.txt` copies `secp256k1_kernels.metallib` next to exactly
+three targets — `metal_secp256k1_test`, `metal_secp256k1_bench_full`,
+`metal_audit_runner` — all of which live in `<build>/src/metal`. The CPU audit
+binaries (`unified_audit_runner` plus ~500 standalone CTest targets) live in
+`<build>/audit`, and ctest runs them from there. `gpu_backend_metal.mm`'s
+CWD-relative candidate list is `secp256k1_kernels.metallib`, `./…`, `../…`,
+`../../…`, `../metal/…`, `../../metal/…`, `../../../metal/…` — every one of
+which assumes a `<build>/metal`, and none of which reaches `<build>/src/metal`
+from `<build>/audit`. So the library was built, was correct, and was
+unreachable.
+
+Two changes, both additive:
+
+- the metallib is now also copied into `${CMAKE_BINARY_DIR}/audit`, attached to
+  `metal_shaders` because `add_custom_command(TARGET …)` requires the target to
+  be defined in the same directory and `audit/` is a sibling added later;
+- `../src/metal/…` and `../../src/metal/…` join the resolver's candidate list,
+  after every path that resolved before, so nothing that used to load changes.
+
+Not reproducible here — there is no macOS host on this machine — so this rests
+on the build-graph and the resolver's own candidate list rather than on a local
+run. Verified only that the Linux configure, full build and fast gates are
+unaffected.
+
 ## 2026-09-06 — field reduce() lost a carry two different ways, and returned a wrong number for a legal input
 
 Recovered from the `experiment/representation-search` working tree, where it sat

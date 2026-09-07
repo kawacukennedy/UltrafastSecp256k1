@@ -19,6 +19,7 @@
 #include <thread>
 #include <vector>
 #include <filesystem>
+#include <string>
 #include <system_error>
 #include <atomic>
 
@@ -513,15 +514,23 @@ static void test_metal_shader_path_thread_safety() {
     std::printf("[gpu_abi_gate] Metal shader-path override thread safety (platform-independent)\n");
 
     constexpr int kThreads = 8;
+    // Absolute for the platform we are actually running on. A "/tmp/..." literal
+    // has a root-directory but no root-name, so std::filesystem::path::is_absolute()
+    // is FALSE on Windows -- set_metal_shader_path_override() rejected all 400 calls
+    // there and MSP-THREAD-1 failed for a reason that had nothing to do with thread
+    // safety. The banner above already claims platform independence; now it is true.
+    std::error_code path_ec;
+    std::filesystem::path const abs_base = std::filesystem::temp_directory_path(path_ec);
     std::vector<std::thread> pool;
     std::atomic<int> ok_count{0};
     pool.reserve(kThreads);
     for (int t = 0; t < kThreads; ++t) {
-        pool.emplace_back([t, &ok_count]() {
-            char path[64];
-            std::snprintf(path, sizeof(path), "/tmp/ufsecp_neg_metal_path_thread_%d", t);
+        pool.emplace_back([t, &ok_count, &abs_base]() {
+            std::filesystem::path thread_path = abs_base;
+            thread_path /= ("ufsecp_neg_metal_path_thread_" + std::to_string(t));
+            std::string const path = thread_path.string();
             for (int iter = 0; iter < 50; ++iter) {
-                if (ufsecp_gpu_set_metal_shader_path(path) == UFSECP_OK) {
+                if (ufsecp_gpu_set_metal_shader_path(path.c_str()) == UFSECP_OK) {
                     ok_count.fetch_add(1, std::memory_order_relaxed);
                 }
             }

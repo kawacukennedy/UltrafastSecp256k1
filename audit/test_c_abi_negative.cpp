@@ -38,6 +38,8 @@
 #include <cstdint>
 #include <array>
 #include <filesystem>
+#include <initializer_list>
+#include <string>
 #include <system_error>
 
 #ifndef UFSECP_BUILDING
@@ -1424,10 +1426,25 @@ static void run_neg21_gpu(void) {
                   "NEG-21.11b: gpu_set_metal_shader_path(empty) -> error");
         CHECK_ERR(ufsecp_gpu_set_metal_shader_path("relative/shader/dir"),
                   "NEG-21.11c: gpu_set_metal_shader_path(relative_path) -> error (fail-closed)");
-        CHECK_ERR(ufsecp_gpu_set_metal_shader_path("/tmp/../etc"),
+        // Build the absolute cases from temp_directory_path() rather than from a
+        // "/tmp/..." literal. On Windows a path with a root-directory but no
+        // root-name is NOT absolute -- std::filesystem::path("/tmp/x").is_absolute()
+        // is false there -- so every literal below was rejected by the
+        // is_absolute() guard before the check under test was ever reached. The
+        // accept cases failed outright and the reject cases passed for the wrong
+        // reason, testing POSIX path syntax rather than the traversal policy this
+        // block exists for. (CI / windows (Release): NEG-21.11e, .12, .12b.)
+        auto const abs_base = std::filesystem::temp_directory_path(ec);
+        auto const abs_path = [&abs_base](std::initializer_list<const char*> parts) {
+            std::filesystem::path p = abs_base;
+            for (const char* part : parts) p /= part;   // no normalisation: ".." survives
+            return p.string();
+        };
+
+        CHECK_ERR(ufsecp_gpu_set_metal_shader_path(abs_path({"..", "etc"}).c_str()),
                   "NEG-21.11d: gpu_set_metal_shader_path(path_traversal) -> error (fail-closed)");
         CHECK_OK(ufsecp_gpu_set_metal_shader_path(
-                     "/tmp/ufsecp_metal_shader_override_target_neg21"),
+                     abs_path({"ufsecp_metal_shader_override_target_neg21"}).c_str()),
                  "NEG-21.11e: gpu_set_metal_shader_path(valid_absolute_path) -> accepted "
                  "(from an unrelated temp CWD; existence checked lazily on first use, not here)");
 
@@ -1440,19 +1457,19 @@ static void run_neg21_gpu(void) {
         // secp256k1::gpu::detail::path_has_dotdot_component (gpu_backend.hpp),
         // shared by set_metal_shader_path_override() and the
         // UFSECP_METAL_SHADER_PATH env-var reader in gpu_backend_metal.mm.
-        CHECK_OK(ufsecp_gpu_set_metal_shader_path("/tmp/ufsecp_neg21_v2..final_dir"),
+        CHECK_OK(ufsecp_gpu_set_metal_shader_path(abs_path({"ufsecp_neg21_v2..final_dir"}).c_str()),
                  "NEG-21.12: gpu_set_metal_shader_path: component with two dots but no "
                  "\"..\" SEGMENT (\"v2..final_dir\") -> accepted (component-based check, "
                  "not a banned substring)");
-        CHECK_OK(ufsecp_gpu_set_metal_shader_path("/tmp/my..file.metallib"),
+        CHECK_OK(ufsecp_gpu_set_metal_shader_path(abs_path({"my..file.metallib"}).c_str()),
                  "NEG-21.12b: gpu_set_metal_shader_path: leaf component \"my..file.metallib\" "
                  "(two dots inside one component, no traversal) -> accepted");
-        CHECK_ERR(ufsecp_gpu_set_metal_shader_path("/tmp/ufsecp_neg21_escape/../escape"),
+        CHECK_ERR(ufsecp_gpu_set_metal_shader_path(abs_path({"ufsecp_neg21_escape", "..", "escape"}).c_str()),
                   "NEG-21.12c: gpu_set_metal_shader_path: genuine \"..\" component "
-                  "(\"/tmp/ufsecp_neg21_escape/../escape\") -> rejected (fail-closed)");
-        CHECK_ERR(ufsecp_gpu_set_metal_shader_path("/tmp/foo/../../bar.metallib"),
+                  "(<tmp>/ufsecp_neg21_escape/../escape) -> rejected (fail-closed)");
+        CHECK_ERR(ufsecp_gpu_set_metal_shader_path(abs_path({"foo", "..", "..", "bar.metallib"}).c_str()),
                   "NEG-21.12d: gpu_set_metal_shader_path: multiple \"..\" components "
-                  "(\"/tmp/foo/../../bar.metallib\") -> rejected (fail-closed)");
+                  "(<tmp>/foo/../../bar.metallib) -> rejected (fail-closed)");
         CHECK_ERR(ufsecp_gpu_set_metal_shader_path("../escape.metallib"),
                   "NEG-21.12e: gpu_set_metal_shader_path: relative path with a \"..\" "
                   "component -> rejected (both the relative-path check and the "

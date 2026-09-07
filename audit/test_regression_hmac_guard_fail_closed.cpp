@@ -42,6 +42,7 @@
 
 #include <cstdio>
 #include <cstddef>
+#include <algorithm>
 #include <string>
 
 #include "audit_check.hpp"
@@ -84,7 +85,13 @@ int test_regression_hmac_guard_fail_closed_run() {
     std::printf("  Regression: RFC 6979 HMAC length guards fail closed\n");
     std::printf("======================================================================\n\n");
 
-    std::string const src = audit_read_source_file("src/cpu/src/ecdsa.cpp");
+    std::string src = audit_read_source_file("src/cpu/src/ecdsa.cpp");
+    // Normalise line endings before matching. There is no .gitattributes in
+    // this repository, so whether a checkout has LF or CRLF is up to the
+    // runner's core.autocrlf -- and function_body()'s "\n    }\n" terminator
+    // would silently stop matching under CRLF, leaving every body empty and
+    // every check below failing for a reason that is not about the code.
+    src.erase(std::remove(src.begin(), src.end(), '\r'), src.end());
     CHECK(!src.empty(),
           "src/cpu/src/ecdsa.cpp resolves from any CWD (audit_read_source_file)");
     if (src.empty()) {

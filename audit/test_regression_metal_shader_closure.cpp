@@ -74,7 +74,12 @@ std::vector<std::string> quoted_includes(const std::string& src) {
         if (q1 == std::string::npos) continue;
         std::size_t const q2 = line.find('"', q1 + 1);
         if (q2 == std::string::npos) continue;
-        out.push_back(line.substr(q1 + 1, q2 - q1 - 1));
+        std::string name = line.substr(q1 + 1, q2 - q1 - 1);
+        // A CRLF checkout puts '\r' before the closing quote of nothing here,
+        // but the surrounding line handling elsewhere splits on '\n' only --
+        // strip defensively so a name never carries a stray carriage return.
+        name.erase(std::remove(name.begin(), name.end(), '\r'), name.end());
+        out.push_back(name);
     }
     return out;
 }

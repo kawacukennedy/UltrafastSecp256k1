@@ -3060,13 +3060,33 @@ private:
         }
 
         std::string source = metal_load_combined_source(shader_dirs);
-        if (source.empty())
+        if (source.empty()) {
+            // Say WHICH path ran out, on stderr, once. Both of the failure
+            // messages below only reach last_msg_, and no test prints that --
+            // so two rounds of macOS CI logs showed "Failed to load metallib"
+            // (one line per existing candidate) and nothing at all about
+            // whether the source fallback was even reachable. That is the
+            // difference between "the device rejects our metallib" and "the
+            // shader sources are not where we looked", and it decides the fix.
+            std::fprintf(stderr,
+                         "[Metal] ERROR: no metallib loaded and no shader sources found "
+                         "(%zu source dir(s) tried, first: %s)\n",
+                         shader_dirs.size(),
+                         shader_dirs.empty() ? "(none)" : shader_dirs.front().c_str());
             return set_error(GpuError::Launch,
                              "Metal: could not find metallib or shader sources");
+        }
 
-        if (!runtime_->load_library_from_source(source))
+        if (!runtime_->load_library_from_source(source)) {
+            std::fprintf(stderr,
+                         "[Metal] ERROR: shader sources found (%zu bytes) but runtime "
+                         "compilation failed\n", source.size());
             return set_error(GpuError::Launch,
                              "Metal: runtime shader compilation failed");
+        }
+        std::fprintf(stderr,
+                     "[Metal] note: loaded from shader sources at runtime (%zu bytes) -- "
+                     "the prebuilt metallib was not usable here\n", source.size());
 
         lib_ready_ = true;
         clear_error();

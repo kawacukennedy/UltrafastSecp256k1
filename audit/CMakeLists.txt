@@ -416,6 +416,13 @@ if(TARGET secp256k1_gpu_host AND (TARGET ufsecp_shared OR TARGET ufsecp_static))
         # process-global override back instead of fail-closing Metal for every
         # later case in this binary.
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu/include
+        # gpu_backend.hpp's first include is the CMake-generated
+        # secp256k1/secp256k1_features.h. fastsecp256k1 exports that directory
+        # PUBLIC, but this target links ufsecp_shared/ufsecp_static, which take
+        # fastsecp256k1 PRIVATE -- so the directory does not propagate here and
+        # the header is unresolvable. Name it directly rather than adding a
+        # second copy of the engine to the link line.
+        ${CMAKE_BINARY_DIR}/src/cpu/include      # secp256k1_features.h
     )
     target_compile_definitions(test_gpu_abi_gate PRIVATE STANDALONE_TEST)
     add_test(NAME gpu_abi_gate COMMAND test_gpu_abi_gate)

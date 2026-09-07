@@ -19,6 +19,7 @@
 #include <string>
 #include <fstream>
 #include <filesystem>
+#include <system_error>
 #include <sstream>
 #include <limits>
 #include <mutex>
@@ -2947,8 +2948,43 @@ private:
             nullptr
         };
 
-        for (int i = 0; metallib_paths[i]; i++) {
-            if (runtime_->load_library_from_path(metallib_paths[i])) {
+        // The build tree's own metallib, by absolute path, tried FIRST.
+        //
+        // Every candidate below is relative to the process working directory,
+        // and ctest runs each audit binary from its own CMAKE_CURRENT_BINARY_DIR
+        // -- <build>/audit for the ~500 standalone targets and the unified
+        // runner -- while the metallib is produced in <build>/src/metal. No
+        // relative spelling reaches across, so on CI / macos (Release) every
+        // Metal-backed audit test reported a GPU failure for a file it never
+        // found: gpu_abi_gate (GROW-1..4), gpu_collect_verify_parity,
+        // unified_audit (BCV-6, SW-BIP352-*) and regression_bip352_ct_varbase.
+        // The Metal tests that run from <build>/src/metal itself
+        // (secp256k1_metal_test, _bench, _bench_full) all passed in the same
+        // job, which is what pins this to path resolution rather than to the
+        // device.
+        //
+        // UFSECP_METAL_METALLIB_DIR is baked in by CMake -- the same fix shape
+        // as UFSECP_SOURCE_ROOT for the audit source resolvers -- and is
+        // defined only for in-tree test builds, so an installed library carries
+        // no build path. If it is absent or stale the search below runs exactly
+        // as before.
+        std::vector<std::string> candidates;
+#ifdef UFSECP_METAL_METALLIB_DIR
+        candidates.emplace_back(
+            std::string(UFSECP_METAL_METALLIB_DIR) + "/secp256k1_kernels.metallib");
+#endif
+        for (int i = 0; metallib_paths[i]; i++)
+            candidates.emplace_back(metallib_paths[i]);
+
+        for (const auto& cand : candidates) {
+            // Probe before loading. load_library_from_path() writes a
+            // "[Metal] ERROR: Failed to load metallib: library not found" line
+            // for every miss, so an eventually-successful search still printed
+            // one error per earlier candidate -- in the macOS CI log that is
+            // hundreds of lines that look like failures and are not.
+            std::error_code fs_ec;
+            if (!std::filesystem::exists(cand, fs_ec) || fs_ec) continue;
+            if (runtime_->load_library_from_path(cand)) {
                 lib_ready_ = true;
                 clear_error();
                 return GpuError::Ok;
@@ -2956,14 +2992,23 @@ private:
         }
 
         /* Fallback: compile shader source at runtime */
-        const std::vector<std::string> shader_dirs = {
-            "shaders",
-            "../shaders",
-            "../../shaders",
-            "../metal/shaders",
-            "../../metal/shaders",
-            "../../../metal/shaders",
-        };
+        std::vector<std::string> shader_dirs;
+#ifdef UFSECP_METAL_METALLIB_DIR
+        // Same reasoning as the metallib candidate above: the build tree's
+        // shader copies live in <build>/src/metal/shaders, which no CWD-relative
+        // spelling below reaches from <build>/audit.
+        shader_dirs.emplace_back(std::string(UFSECP_METAL_METALLIB_DIR) + "/shaders");
+#endif
+        for (const char* d : {
+                 "shaders",
+                 "../shaders",
+                 "../../shaders",
+                 "../metal/shaders",
+                 "../../metal/shaders",
+                 "../../../metal/shaders",
+             }) {
+            shader_dirs.emplace_back(d);
+        }
 
         std::string source = metal_load_combined_source(shader_dirs);
         if (source.empty())

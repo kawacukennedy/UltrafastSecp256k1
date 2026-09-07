@@ -122,6 +122,12 @@ if(SECP256K1_BUILD_METAL AND TARGET secp256k1_metal_lib)
     target_sources(audit_gpu_backends_provider INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu/src/gpu_backend_metal.mm)
     target_compile_definitions(audit_gpu_backends_provider INTERFACE SECP256K1_HAVE_METAL=1)
+    # Same absolute metallib path src/gpu/CMakeLists.txt bakes into the shared
+    # GPU backend. These audit binaries compile gpu_backend_metal.mm themselves,
+    # so without it they keep the CWD-relative search that cannot reach
+    # <build>/src/metal from <build>/audit -- which is where ctest runs them.
+    target_compile_definitions(audit_gpu_backends_provider INTERFACE
+        "UFSECP_METAL_METALLIB_DIR=\"${CMAKE_BINARY_DIR}/src/metal\"")
     target_link_libraries(audit_gpu_backends_provider INTERFACE secp256k1_metal_lib)
     target_include_directories(audit_gpu_backends_provider INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/metal/include)

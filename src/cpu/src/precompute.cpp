@@ -71,6 +71,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
@@ -2282,27 +2283,79 @@ void invalidate_context_locked() {
 #if defined(__clang__)
 __attribute__((no_sanitize("memory")))
 #endif
-std::string get_default_cache_path(unsigned window_bits) {
-    // Build cache filename with GLV suffix if enabled
+// Directory the cache lives in when the caller did not name one: the system
+// temp directory, never the current working directory. A file placed here is
+// owned by this process and removed on exit (see g_temp_cache_cleanup).
+std::string default_cache_dir() {
+    // Deliberately not std::filesystem::temp_directory_path(): it throws on a
+    // missing TMPDIR target and reads env through libstdc++ internals that MSan
+    // does not instrument. The variables below are the same ones it consults.
+    for (const char* var : {"TMPDIR", "TMP", "TEMP"}) {
+        const char* v = std::getenv(var);
+        if (v && *v) {
+            std::string d(v);
+            while (d.size() > 1 && d.back() == '/') d.pop_back();
+            return d;
+        }
+    }
+#if defined(_WIN32)
+    return ".";   // no TMP/TEMP set on Windows is pathological; stay put
+#else
+    return "/tmp";
+#endif
+}
+
+std::string cache_filename(unsigned window_bits) {
     std::string filename = "cache_w" + std::to_string(window_bits);
     if (g_config.enable_glv) {
         filename += "_glv";
     }
     filename += ".bin";
-    
-    // Use configured cache directory
-    if (!g_config.cache_dir.empty()) {
-        std::string cache_path = g_config.cache_dir + "/" + filename;
-        // Use stat() instead of std::filesystem::exists() to avoid
-        // MSan false positives from uninstrumented libstdc++ internals.
-        struct stat st;
-        if (::stat(cache_path.c_str(), &st) == 0) {
-            return cache_path;
-        }
-    }
-    
-    // Fall back to current directory
     return filename;
+}
+
+// Resolve the cache path for BOTH reading and writing.
+//
+// The previous version consulted cache_dir only when a file already existed
+// there and otherwise returned a bare filename -- i.e. the current working
+// directory. Two consequences, both reported from the field: a caller that had
+// set a cache directory still wrote its first cache into the CWD, and a caller
+// that had set nothing got a 255 MB cache_w18.bin dropped wherever it happened
+// to be running. Neither is a thing a math library should do.
+std::string get_default_cache_path(unsigned window_bits) {
+    std::string const filename = cache_filename(window_bits);
+    std::string const dir = g_config.cache_dir.empty() ? default_cache_dir()
+                                                       : g_config.cache_dir;
+    return dir + "/" + filename;
+}
+
+// True when the cache path is one WE chose (the temp default) rather than one
+// the caller named. Only the former is ours to delete.
+bool cache_path_is_ours() {
+    return !g_config.cache_path_set && g_config.cache_dir.empty();
+}
+
+// Remove-on-exit for a cache file this library placed in the temp directory.
+//
+// evoskuil's preference order was: don't write it at all; else let us control
+// the path; else treat it as a temp file that is cleaned up; and only last,
+// leave it in the working directory. The default is now the first of those, and
+// this makes the opt-in-without-a-path case the third rather than the fourth.
+//
+// std::atexit rather than a static destructor: the path is a plain C string
+// captured by value, so nothing here depends on the order in which other static
+// objects (including g_config) are destroyed.
+void register_temp_cache_for_cleanup(const std::string& path) {
+    static std::once_flag once;
+    static std::string kept_path;
+    std::call_once(once, [&path] {
+        kept_path = path;
+        std::atexit([] {
+            if (!kept_path.empty()) {
+                std::remove(kept_path.c_str());
+            }
+        });
+    });
 }
 
 bool write_field_element(std::ofstream& file, const FieldElement& fe) {
@@ -2614,8 +2667,13 @@ void ensure_built_locked() {
             }
             publish_context_locked(std::move(next));
 
-            // Save to cache for next time
-            save_precompute_cache_locked(cache_path);
+            // Save to cache for next time.
+            if (save_precompute_cache_locked(cache_path) && cache_path_is_ours()) {
+                // We chose this path (the temp default), so we clean it up.
+                // A caller who named a directory asked for persistence and keeps
+                // their file. Registered once; the path is stable for the process.
+                register_temp_cache_for_cleanup(cache_path);
+            }
         } else {
             // Cache disabled, just build in memory
             std::shared_ptr<PrecomputeContext> next(build_context(g_config));

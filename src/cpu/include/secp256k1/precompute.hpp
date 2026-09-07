@@ -52,13 +52,49 @@ struct FixedBaseConfig {
     unsigned thread_count = 0U;         // 0 = auto-detect
     
     // Cache configuration
-    bool use_cache = true;              // Enable cache system
+    //
+    // Two modes, and the default is the one that writes nothing.
+    //
+    //   OFF (default): the fixed-base table is built in memory on first use and
+    //                  never touches the filesystem.
+    //   ON  : the table is persisted so a later process can load it instead of
+    //         rebuilding. Opt in with -DSECP256K1_FIXED_BASE_DISK_CACHE=ON, or
+    //         at runtime with configure_fixed_base().
+    //
+    // It used to default ON with cache_dir empty, which meant every process
+    // that touched a fixed-base multiplication dropped a cache_w18.bin -- 255 MB
+    // at the default window_bits=18 -- into whatever directory it happened to be
+    // running in, and left it there. Reported by Eric Voskuil (evoskuil): "a math
+    // lib leaves files behind in our working directory" was his last-choice
+    // outcome, and it was what we shipped.
+    //
+    // When the cache IS enabled, see cache_dir below for where it goes and
+    // whether it is cleaned up.
+#if defined(SECP256K1_FIXED_BASE_DISK_CACHE) && SECP256K1_FIXED_BASE_DISK_CACHE
+    bool use_cache = true;
+#else
+    bool use_cache = false;
+#endif
     std::string cache_path{};           // Empty = auto-detect cache path from cache_dir
     // MSan note: std::string SSO bits are untracked with uninstrumented libc++.
     // Use this bool (plain scalar, MSan-clean) instead of cache_path.empty() checks
     // inside critical paths that run under MSan (e.g. ensure_built_locked).
     bool cache_path_set = false;        // true when cache_path was explicitly set
-    std::string cache_dir = "";         // Default cache directory with all precomputed tables
+    // Where the cache goes when use_cache is on.
+    //
+    //   set   : the caller owns the file. It is written there, read from there,
+    //           and NOT deleted -- persistence across processes is the reason to
+    //           name a directory.
+    //   empty : the system temp directory, and the file is removed when the
+    //           process exits. Session-scoped, nothing left behind.
+    //
+    // Previously an empty cache_dir meant the current working directory, and a
+    // set cache_dir was consulted only for READING: get_default_cache_path()
+    // returned the cache_dir path only when a file already existed there, so the
+    // first run of a process that had called set_cache_directory() still wrote
+    // into the CWD. "You can specify any dir" was therefore not true until
+    // someone had seeded the file by hand.
+    std::string cache_dir = "";
     unsigned max_windows_to_load = 0U;  // Load all windows for optimal performance
     
     // Progress reporting

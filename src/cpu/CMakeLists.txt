@@ -902,6 +902,16 @@ if(SECP256K1_HAS_ASM)
     message(STATUS "  -> Expected K*Q: ~18-24 us (vs 66 us current)")
 endif()
 
+# Fixed-base disk cache: PUBLIC so the default in precompute.hpp matches what the
+# library itself was compiled with. Without PUBLIC a consumer including the
+# header would see use_cache=false while the library was built expecting true.
+if(SECP256K1_FIXED_BASE_DISK_CACHE)
+    target_compile_definitions(${SECP256K1_LIB_NAME} PUBLIC SECP256K1_FIXED_BASE_DISK_CACHE=1)
+    message(STATUS "  Fixed-base disk cache: ON (table persisted; temp dir + cleanup unless a cache directory is set)")
+else()
+    message(STATUS "  Fixed-base disk cache: OFF (table built in memory, nothing written)")
+endif()
+
 # Enable fast modular reduction on x86_64 (even without ASM, uses BMI2 intrinsics)
 if(SECP256K1_USE_FAST_REDUCTION AND _SECP_TARGET_ARCH MATCHES "x86_64|AMD64|X64")
     target_compile_definitions(${SECP256K1_LIB_NAME} PUBLIC SECP256K1_USE_FAST_REDUCTION=1)

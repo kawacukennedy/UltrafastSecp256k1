@@ -96,6 +96,19 @@ option(SECP256K1_BUILD_TESTS "Build test suite" ON)
 option(SECP256K1_BUILD_BENCH "Build benchmarks" ON)
 option(SECP256K1_BUILD_EXAMPLES "Build example programs" ON)
 option(SECP256K1_BUILD_JAVA "Build Java JNI bindings" ON)
+# Fixed-base table: persist to disk, or build in memory every time.
+#
+# OFF (default): nothing is written. The table is built on first use and
+#                lives only in memory.
+# ON           : the table is persisted so a later process can load it.
+#                With no cache directory configured it goes to the system
+#                temp dir and is removed at exit; name a directory via
+#                set_cache_directory() and the file is yours to keep.
+#
+# It used to be unconditionally on with no directory, which meant every
+# process touching a fixed-base multiplication left a 255 MB cache_w18.bin
+# in its working directory.
+option(SECP256K1_FIXED_BASE_DISK_CACHE "Persist the fixed-base precompute table to disk" OFF)
 option(SECP256K1_USE_ASM "Enable assembly optimizations (x64/RISC-V)" ON)
 
 # Installation options

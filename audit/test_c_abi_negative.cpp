@@ -42,6 +42,11 @@
 #include <string>
 #include <system_error>
 
+// metal_shader_path_override() / clear_metal_shader_path_override(): the
+// process-global override the NEG-21 accept cases must put back (see the guard
+// in that block).
+#include "gpu_backend.hpp"
+
 #ifndef UFSECP_BUILDING
 #define UFSECP_BUILDING
 #endif
@@ -1413,12 +1418,34 @@ static void run_neg21_gpu(void) {
     // unrelated temporary directory (not any build/shader directory) to
     // prove the accepted path is validated on its own merits, not resolved
     // relative to the process working directory.
+    // Captured outside the block so NEG-21.14 below can compare against it.
+    std::string const shader_path_after_check =
+        secp256k1::gpu::metal_shader_path_override();
     {
         std::error_code ec;
         auto original_cwd = std::filesystem::current_path(ec);
         auto tmp_dir = std::filesystem::temp_directory_path(ec) / "ufsecp_neg21_shader_path_cwd_test";
         std::filesystem::create_directories(tmp_dir, ec);
         if (!ec) std::filesystem::current_path(tmp_dir, ec);
+
+        // Put the process-global shader-path override back when this block ends.
+        //
+        // The accept cases below leave it pointing at a scratch directory that
+        // holds no metallib, and the override is deliberately fail-closed: when
+        // set it REPLACES the default search instead of extending it. In
+        // unified_audit_runner this module is number 70 of 468, so on
+        // `CI / macos (Release)` every Metal module ordered after it failed
+        // against that scratch path -- BCV-6, SW-BIP352-*, SW-BIP352-METAL-*.
+        // On a host with no Metal backend nothing noticed.
+        struct ShaderPathOverrideGuard {
+            std::string saved;
+            ShaderPathOverrideGuard()
+                : saved(secp256k1::gpu::metal_shader_path_override()) {}
+            ~ShaderPathOverrideGuard() {
+                if (saved.empty()) secp256k1::gpu::clear_metal_shader_path_override();
+                else secp256k1::gpu::set_metal_shader_path_override(saved.c_str());
+            }
+        } shader_path_guard;
 
         CHECK_ERR(ufsecp_gpu_set_metal_shader_path(nullptr),
                   "NEG-21.11: gpu_set_metal_shader_path(null) -> error");
@@ -1524,6 +1551,16 @@ static void run_neg21_gpu(void) {
 
         if (!ec && !original_cwd.empty()) std::filesystem::current_path(original_cwd, ec);
     }
+
+    // NEG-21.14: the accept cases above must not leave the process-global
+    // shader-path override pointing at a scratch directory. The override is
+    // fail-closed -- when set it REPLACES the default search -- so a leak here
+    // disables Metal for everything that runs afterwards in the same process.
+    // In unified_audit_runner this module is number 70 of 468.
+    CHECK_OK(secp256k1::gpu::metal_shader_path_override() == shader_path_after_check
+                 ? UFSECP_OK : UFSECP_ERR_INTERNAL,
+             "NEG-21.14: the NEG-21 block restores the Metal shader-path override it "
+             "changed, so a scratch path cannot fail-close Metal for every later caller");
 
     // ufsecp_gpu_zk_ecdsa_snark_witness_batch
     uint8_t witness[760];

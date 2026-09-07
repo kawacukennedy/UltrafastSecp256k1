@@ -411,6 +411,11 @@ if(TARGET secp256k1_gpu_host AND (TARGET ufsecp_shared OR TARGET ufsecp_static))
     target_include_directories(test_gpu_abi_gate PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../include
         ${CMAKE_BINARY_DIR}/include/ufsecp    # ufsecp_version.h
+        # gpu_backend.hpp: metal_shader_path_override() /
+        # clear_metal_shader_path_override(), so MSP-THREAD-1/2 can put the
+        # process-global override back instead of fail-closing Metal for every
+        # later case in this binary.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu/include
     )
     target_compile_definitions(test_gpu_abi_gate PRIVATE STANDALONE_TEST)
     add_test(NAME gpu_abi_gate COMMAND test_gpu_abi_gate)

@@ -26,6 +26,11 @@
 #include "ufsecp/ufsecp_gpu.h"
 #include "ufsecp/ufsecp.h"
 
+// metal_shader_path_override() / clear_metal_shader_path_override(): the
+// process-global override this test must put back. Header-only, and its storage
+// is the same inline function-local static the Metal backend reads.
+#include "gpu_backend.hpp"
+
 static int g_pass = 0;
 static int g_fail = 0;
 
@@ -510,8 +515,28 @@ static void test_bip352_overlap_safety() {
  * corrupt the stored string, or observe torn reads. Each thread uses its own
  * syntactically-valid absolute path so a successful call is unambiguous.
  * ============================================================================ */
+// RAII: put the shader-path override back the way we found it.
+//
+// The override is deliberately fail-closed -- when set, it REPLACES the default
+// search rather than extending it -- so a test that sets one to a scratch
+// directory and walks away disables Metal for the rest of the process. On
+// `CI / macos (Release)` that is exactly what happened: this test set an
+// override 400 times, and the very next case (the BIP-352 pool, GROW-1..4)
+// failed with "[Metal] ERROR: Failed to load metallib: library not found"
+// against that scratch directory -- one error per ensure_library(), never
+// reaching the default search at all.
+struct MetalShaderPathOverrideGuard {
+    std::string saved;
+    MetalShaderPathOverrideGuard() : saved(secp256k1::gpu::metal_shader_path_override()) {}
+    ~MetalShaderPathOverrideGuard() {
+        if (saved.empty()) secp256k1::gpu::clear_metal_shader_path_override();
+        else               secp256k1::gpu::set_metal_shader_path_override(saved.c_str());
+    }
+};
+
 static void test_metal_shader_path_thread_safety() {
     std::printf("[gpu_abi_gate] Metal shader-path override thread safety (platform-independent)\n");
+    MetalShaderPathOverrideGuard override_guard;
 
     constexpr int kThreads = 8;
     // Absolute for the platform we are actually running on. A "/tmp/..." literal
@@ -539,6 +564,26 @@ static void test_metal_shader_path_thread_safety() {
     for (auto& th : pool) th.join();
     CHECK(ok_count.load() == kThreads * 50,
           "MSP-THREAD-1: concurrent set_metal_shader_path calls from 8 threads all succeed, no crash/corruption");
+}
+
+// MSP-THREAD-2: the guard above must actually put the override back. Without
+// this, a future edit that drops the guard silently disables Metal for every
+// later case in this binary and the only symptom is a metallib "not found"
+// against a scratch path.
+static void test_metal_shader_path_override_restored() {
+    std::string const before = secp256k1::gpu::metal_shader_path_override();
+    {
+        MetalShaderPathOverrideGuard guard;
+        std::error_code ec;
+        auto scratch = std::filesystem::temp_directory_path(ec) / "ufsecp_msp_thread2_scratch";
+        CHECK(ufsecp_gpu_set_metal_shader_path(scratch.string().c_str()) == UFSECP_OK,
+              "MSP-THREAD-2: an absolute scratch override is accepted");
+        CHECK(secp256k1::gpu::metal_shader_path_override() == scratch.string(),
+              "MSP-THREAD-2: the override reads back as the value just set");
+    }
+    CHECK(secp256k1::gpu::metal_shader_path_override() == before,
+          "MSP-THREAD-2: leaving the guarded scope restores the previous override, so a "
+          "scratch path cannot fail-close Metal for the rest of the process");
 }
 
 /* ============================================================================
@@ -684,6 +729,7 @@ int test_gpu_abi_gate_run() {
     test_gpu_ops_if_available();
     test_bip352_overlap_safety();
     test_metal_shader_path_thread_safety();
+    test_metal_shader_path_override_restored();
     test_metal_concurrent_ctx_create();
     test_bip352_metal_pool_grow_only_capacity();
 

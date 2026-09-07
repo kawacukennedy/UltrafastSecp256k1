@@ -1,5 +1,54 @@
 # Audit Changelog
 
+## 2026-09-07 — two audit tests were fail-closing Metal for everything that ran after them
+
+`CI / macos (Release)` kept failing `gpu_abi_gate`, `gpu_collect_verify_parity`
+and `unified_audit` with
+
+    [Metal] ERROR: Failed to load metallib: library not found
+
+Adding a diagnostic to the shader-source fallback settled it: none of that
+fallback's messages ever appeared. `ensure_library()` was not reaching the
+default search at all — it was taking the EXPLICIT-OVERRIDE branch, which is
+deliberately fail-closed and does not fall back.
+
+Nothing in production sets that override. Two audit tests do, and neither put
+it back:
+
+  * `test_gpu_abi_gate`'s `test_metal_shader_path_thread_safety()` sets it 400
+    times to a scratch directory. The very next case in the same binary is the
+    BIP-352 pool — GROW-1..4, which failed against that scratch path.
+  * `test_c_abi_negative`'s NEG-21 accept cases (`.11e`, `.12`, `.12b`) set it
+    to another scratch directory. In `unified_audit_runner` that module is
+    number 70 of 468, so every Metal module ordered after it failed — BCV-6,
+    SW-BIP352-*, SW-BIP352-METAL-*.
+
+On any host without a Metal backend nothing noticed, which is why this survived.
+
+There was also no way to undo it. `set_metal_shader_path_override()` rejects
+null and empty — both documented errors, and the C ABI's null case is pinned by
+NEG-21.11 — so once set, a process was pinned to that override for its lifetime.
+That is a real gap for any host wanting to point at a directory temporarily, not
+just for tests. `clear_metal_shader_path_override()` (gpu_backend.hpp, internal
+header, not installed) now exists, and both tests save and restore around their
+own scratch values.
+
+Two new blocking checks so this cannot come back:
+
+| check | asserts |
+|---|---|
+| `MSP-THREAD-2` (`gpu_abi_gate`) | leaving the guarded scope restores the previous override |
+| `NEG-21.14` (`c_abi_negative`) | the NEG-21 block restores the override it changed |
+
+Proof they block: instantiating the guard as a declaration only (`};` instead of
+`} shader_path_guard;`) turns c_abi_negative 314/314 into 313/314 with NEG-21.14
+naming the leak. gpu_abi_gate goes 36 → 39 checks, all passing.
+
+This does not explain `gpu_collect_verify_parity`, which runs in its own process
+and sets no override; its failures are Metal compute divergence on the runner's
+Apple Paravirtual device, alongside a `range_proof_poly_batch` pipeline
+compilation failure and a GPU hang. That is tracked separately.
+
 ## 2026-09-07 — the Metal runtime-shader fallback has never been able to run
 
 `CI / macos (Release)` still failed `gpu_abi_gate`, `gpu_collect_verify_parity`

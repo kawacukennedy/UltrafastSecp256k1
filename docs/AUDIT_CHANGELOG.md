@@ -1,5 +1,67 @@
 # Audit Changelog
 
+## 2026-09-06 — field reduce() lost a carry two different ways, and returned a wrong number for a legal input
+
+Recovered from the `experiment/representation-search` working tree, where it sat
+unfinished and unpushed. Reproduced on `dev` before applying anything.
+
+**The reachable one.** `a = 2^256 - 2^33 - 1` is a perfectly ordinary field
+element — `a < p`, canonical, nothing special about it except its shape. On
+`dev`:
+
+```
+input                 fffffffffffffffffffffffffffffffffffffffffffffffffffffffdffffffff
+expected a^2 mod p    fffff860000e8900
+FieldElement::square  fffff85f000e8530      <-- short by 0x1000003d0 = K - 1
+```
+
+`square()`, `operator*` and `square_inplace()` all agreed with each other and all
+disagreed with the arithmetic. The cause is one instruction in
+`field_asm_x64_gas.S`, in the second reduction fold of all three GAS copies
+(`reduce_4_asm`, `field_mul_full_asm`, `field_sqr_full_asm`):
+
+```asm
+    mov  rax, 0x1000003D1
+    and  rax, rdi            # rdi is 0 or 1
+```
+
+The comment above it says "Use AND mask instead of MULX" — but the mask was never
+built. `0x1000003D1 & 1` is `1`, not `K`, so whenever the first fold overflowed,
+the reduction added **1** where it owed **K**, and the result came out short by
+exactly `K - 1`. Fixed by `neg` on the carry first, turning 0/1 into 0/-1 so the
+AND does what the comment always claimed.
+
+**The second one**, in the portable `reduce()` in `field.cpp`: the first fold
+propagated its carry into `result[i+2]` and, at most, `result[i+3]` — a chain
+that cannot reach `result[4]`. Replaced with a cascade through every remaining
+limb. This is the path taken by the sanitizer, coverage and no-ASM cross builds.
+
+**Blast radius, measured.** 8,484 vectors (values near `p`, near `2^256`,
+`2^k ± small`, the trigger family, and 4,000 uniform random), each squared and
+multiplied, against Python ground truth:
+
+| build | square mismatches | multiply mismatches |
+|---|---:|---:|
+| `dev` before | **9** | **64** |
+| after, ASM path (BMI2/ADX) | 0 | 0 |
+| after, `-DSECP256K1_USE_ASM=OFF` (C `reduce()`) | 0 | 0 |
+
+So this is a family of legal inputs, not one freak vector — and both the assembly
+and the portable path had to be fixed to close it.
+
+`regression_field_reduce_carry` already existed — it was written on 2026-05-14
+for the first of these two losses — and is **extended** rather than added. The new
+coverage is exact-limb KATs rather than `operator==` (which normalises its
+operands and would hide a non-canonical result), plus direct KATs on all three
+GAS reduction copies including their self-aliased forms, so a regression in any
+one copy is caught independently of which wrapper the public API happens to
+select. That an existing module named for exactly this bug class did not catch
+the second loss is the reason the new cases compare raw limbs: the old ones went
+through `operator==`, and its normalisation hid the difference.
+
+Module count unchanged (468) — the row is the same row, with a description that
+now names both losses.
+
 ## 2026-09-06 — the 5x52 magnitude model, written down and measured (#396)
 
 Issue #396: `FieldElement52` carries no magnitude information, so a magnitude

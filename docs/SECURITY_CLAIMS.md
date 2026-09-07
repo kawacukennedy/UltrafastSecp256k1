@@ -2,6 +2,83 @@
 
 **UltrafastSecp256k1 v4.5.0** -- FAST / CT Dual-Layer Architecture (CPU + GPU)
 
+### 2026-09-07 - Fixed-base disk cache OFF by default, FE52 kernels always inlined, PT_TLS alignment (build-surface changes; no CT boundary moves)
+
+Three changes in this wave touch the root `CMakeLists.txt` and the FE52 field
+kernels, both of which the secret-path change gate classifies as CT
+secret-bearing surfaces. **None of them moves a CT boundary.** Each is recorded
+here so that classification is answered rather than waived.
+
+**1. `SECP256K1_FIXED_BASE_DISK_CACHE` (new CMake option, default OFF)**
+
+`FixedBaseConfig::use_cache` previously defaulted to `true` with an empty
+`cache_dir`, and the path resolver consulted `cache_dir` only when a file was
+already there — so the first run of any caller wrote the fixed-base comb table
+into its **current working directory** (`cache_w18.bin`, 255 MB at the default
+`window_bits = 18`). Reported by Eric Voskuil against libbitcoin's test suite.
+
+- **Security claim: PUBLIC DATA, no secret ever reached that file.** The
+  fixed-base table is precomputed multiples of the generator `G` — the same
+  values any observer can derive. This is a filesystem side-effect defect, not
+  a key-material disclosure, and no advisory is warranted for shipped versions
+  on that basis.
+- **What changed:** the default build now writes nothing at all; the table is
+  built in memory. With `-DSECP256K1_FIXED_BASE_DISK_CACHE=ON` (or
+  `FixedBaseConfig::use_cache = true` set explicitly) the file is created in the
+  configured `cache_dir` on the **first** run — the case the old resolver got
+  wrong — and, when no directory is configured, in the system temp directory.
+  It is never placed in the working directory in either mode.
+- **Ownership:** a cache file in a caller-named directory is the caller's and is
+  not deleted by the library; persistence across processes is the only reason to
+  name a directory. Files the library itself placed in the temp directory are
+  removed at exit.
+- **Test:** `audit/test_regression_fixed_base_cache_lifecycle.cpp`, checks
+  FBC-1..4, which exercise both modes regardless of how the library was built.
+
+**2. FE52 kernels are `always_inline` on every target**
+
+`UFSECP_FE52_FORCE_INLINE_KERNELS` is removed, not flipped: `fe52_mul_inner`
+and `fe52_sqr_inner` are now `always_inline` wherever `field_52_impl.hpp`
+compiles.
+
+- **Security claim: NO CT BOUNDARY CHANGE.** A 5x52 field multiply is
+  straight-line `__int128` arithmetic with no data-dependent branch and no
+  secret-dependent memory access; it is timing-invariant whether it is inlined
+  or called. Inlining changes instruction scheduling, not data dependence. The
+  same two kernels back both the `fast::` and the `ct::` paths, and their
+  operand-independence is what the CT claim in section 7 rests on — that
+  property is unaffected.
+- **What it also removes:** the previous per-build macro was an ODR hazard.
+  `FieldElement52::operator*` and its siblings are `always_inline`
+  external-linkage inlines whose bodies call these kernels, so a binary linked
+  from TUs that disagreed about the macro was a silent mismatch rather than a
+  diagnostic. One shape everywhere removes that failure mode.
+- **Evidence:** x86-64 A/B (i5-14400F, GCC 14.2, governor pinned, turbo off,
+  cpu0, `nice -20`) moved 90 of 104 engine operations >= 500 ns by more than 2%;
+  ARM64 confirmed on two independent machines — a Rockchip RK3588 Cortex-A76
+  here, and an Apple M5 Max by the reporter of GitHub issue #336 on a
+  10,356,829-row BIP-352 scan (14.04-14.52s -> 12.40-12.83s, against a
+  re-measured v3.68.0 baseline of 12.3-12.7s). Cost: `libfastsecp256k1.a` grows
+  14.84% on x86-64 and 22.4% on arm64.
+
+**3. `alignas(64)` on `tl_context_owner` (PT_TLS segment alignment)**
+
+Every `thread_local` in the library was naturally 8- or 16-aligned, so the
+linker emitted `PT_TLS p_align = 8` — and Android arm64 Bionic **refuses to
+load** an executable whose TLS segment is aligned below 64
+("executable's TLS segment is underaligned"). No Android arm64 binary linking
+this library could start.
+
+- **Security claim: NO SECRET LIFETIME CHANGE.** `tl_context_owner` holds a
+  `shared_ptr` to the fixed-base precompute context — public multiples of `G`,
+  the same data as item 1. Raising its alignment changes segment layout, not
+  what is stored or how long it lives. Secret-bearing thread-locals are
+  unaffected and their erasure contracts are unchanged.
+- **Test:** `audit/test_regression_tls_segment_alignment.cpp`, TLS-ALIGN-1/2,
+  which parses the running binary's own program headers via `AT_PHDR` rather
+  than scanning source, so a future `thread_local` added anywhere cannot
+  silently drop the segment alignment back to 8.
+
 ### 2026-07-15 - `ufsecp_gpu_bip352_scan_batch_multispend` added: GPU BIP-352 multi-spend-key scan (GitHub issue #335, paired with `include/ufsecp/ufsecp_gpu.h`)
 
 Added `GpuBackend::bip352_scan_batch_multispend` / C ABI

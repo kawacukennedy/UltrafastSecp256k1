@@ -57,7 +57,7 @@ lags behind the generated validation surfaces, prefer the generated counts.
 | `test_frost_kat.cpp` | -- | FROST t-of-n threshold signing known-answer tests |
 | `test_wycheproof_ecdsa.cpp` | -- | Wycheproof ECDSA: Google Project Wycheproof test vectors |
 | `test_wycheproof_ecdh.cpp` | -- | Wycheproof ECDH: Google Project Wycheproof test vectors |
-| `unified_audit_runner.cpp` | 473 modules (197 non-exploit + 276 exploit PoCs) | Unified audit: all current modules in single binary (includes GPU null-guard paths) |
+| `unified_audit_runner.cpp` | 474 modules (198 non-exploit + 276 exploit PoCs) | Unified audit: all current modules in single binary (includes GPU null-guard paths) |
 
 ### CPU Unit Tests (`src/cpu/tests/`)
 
@@ -106,14 +106,14 @@ lags behind the generated validation surfaces, prefer the generated counts.
 |------|---------|-------|
 | `opencl/tests/test_opencl.cpp` | OpenCL | Kernel correctness |
 | `opencl/tests/opencl_extended_test.cpp` | OpenCL | Extended operations |
-| `opencl/src/opencl_audit_runner.cpp` | OpenCL | Unified GPU audit ( 473 modules, 8 sections) |
+| `opencl/src/opencl_audit_runner.cpp` | OpenCL | Unified GPU audit ( 474 modules, 8 sections) |
 | `metal/tests/test_metal_host.cpp` | Metal | Metal shader correctness |
-| `metal/src/metal_audit_runner.mm` | Metal | `secp256k1_metal_audit`: unified GPU audit ( 473 modules, 8 sections) |
+| `metal/src/metal_audit_runner.mm` | Metal | `secp256k1_metal_audit`: unified GPU audit ( 474 modules, 8 sections) |
 | `src/cuda/src/test_ct_smoke.cu` | CUDA | CT smoke tests incl. ZK knowledge + DLEQ prove/verify (9 tests) |
 | `src/cuda/src/gpu_ct_leakage_probe.cu` | CUDA | Fixed-vs-random device-cycle Welch t-test on CT generator and signing kernels with JSON evidence output |
 | `src/cuda/src/test_suite.cu` | CUDA | `cuda_selftest`: kernel correctness, field + scalar + point ops |
 | `src/cuda/src/test_windows_macro_compat.cu` | CUDA/MSVC | `cuda_windows_macro_compat`: compile regression for Windows SDK `small` macro collisions in the public CUDA header |
-| `src/cuda/src/gpu_audit_runner.cu` | CUDA | `gpu_audit`: unified GPU audit ( 473 modules, 8 sections) |
+| `src/cuda/src/gpu_audit_runner.cu` | CUDA | `gpu_audit`: unified GPU audit ( 474 modules, 8 sections) |
 
 | `metal/app/metal_test.mm` | Metal | `secp256k1_metal_test`: shader correctness, compute pipeline |
 | `metal/app/bench_metal.mm` | Metal | `secp256k1_metal_bench_full`: comprehensive Metal benchmark |
@@ -1092,6 +1092,7 @@ ctest --test-dir build-audit -R "exploit" --output-on-failure
 | `regression_adaptor_blinded_nonce` | `audit/test_regression_adaptor_blinded_nonce.cpp` | SEC-NEW-001/002 + P3-SHIM-STACK + P3-BATCH-MEM: schnorr_adaptor_sign ct::generator_mul_blinded(k) DPA defence, shim_schnorr_bch is_zero_ct on nonce, stack msg buffer 256→1024, batch vector shrink_to_fit |
 | `regression_secret_scalar_residue_erase` | `audit/test_regression_secret_scalar_residue_erase.cpp` | FROST-SIGN-RESIDUE: frost_sign secure_erase of secret-derived rho_ei/lambda_s_e (binding nonce ei + share s_i); schnorr_keypair_create erases d_prime private-key copy — source-scan (3 sites) + keypair sign/verify round-trip |
 | `regression_precompute_gcontext_race` | `audit/test_regression_precompute_gcontext_race.cpp` | PRECOMPUTE-GCONTEXT-UAF: g_context shared_ptr snapshot under g_mutex prevents use-after-free vs concurrent configure_fixed_base reset — source-scan + concurrent reconfigure/compute-vs-reference smoke |
+| `regression_precompute_noop_reconfigure` | `audit/test_regression_precompute_noop_reconfigure.cpp` | PNR-1..4: re-applying an identical FixedBaseConfig keeps the built fixed-base context instead of recomputing the ~250 MB window-18 table, while a real change still invalidates and republishes — Selftest() reconfigures on every call, which cost exploit_selftest_api a 120 s CI timeout |
 | `soundness_adaptor_dleq_forgery` | `audit/test_soundness_adaptor_dleq_forgery.cpp` | SOUNDNESS-PROBE (GHSA-c7q2): negative-soundness test — forge an ECDSA-adaptor pre-sig with log_G(R_hat)≠log_T(R) that still satisfies r==R.x and the ECDSA relation; the Chaum-Pedersen DLEQ binding MUST reject it. Seed of the soundness-coverage gate (ci/check_soundness_coverage.py) |
 | `metamorphic_adaptor` | `audit/test_metamorphic_adaptor.cpp` | METAMORPHIC-PROBE: positive complement to soundness_adaptor_dleq_forgery — ECDSA-adaptor adapt/extract algebraic relations (MR1 adapt-validity, MR2 extract inverts adapt to ±t, MR3 r-invariant, MR4 pre-sig≠sig boundary, MR5 adapt determinism, MR6 witness correspondence). Seed of the metamorphic-coverage gate (ci/check_metamorphic_coverage.py) |
 | `soundness_snark_witness_attestation` | `audit/test_soundness_snark_witness_attestation.cpp` | SOUNDNESS-PROBE (blind-zone #1, eprint 2025/695, GHSA-c7q2 class): ecdsa/schnorr_snark_witness.valid==1 MUST IMPLY canonical ufsecp verify==OK across forged inputs (tampered/malleable s, tampered r, non-canonical r≥p, s==0, wrong msg). The struct-returning attestation that the self-deriving soundness scan now catches |

@@ -227,6 +227,7 @@ int test_regression_ct_blinding_nonce_path_run();    // CT nonce path uses gener
 int test_regression_hmac_guard_fail_closed_run();    // RFC 6979 HMAC length guards zero out[32] before returning
 int test_regression_metal_shader_closure_run();      // Metal shader include closure complete + copied
 int test_regression_metal_buffer_binding_order_run(); // Metal dispatch order == kernel [[buffer(N)]] order
+int test_regression_precompute_noop_reconfigure_run();// identical configure_fixed_base must not rebuild the table
 int test_regression_fixed_base_cache_lifecycle_run(); // fixed-base cache: no CWD litter, cache_dir honoured on write
 int test_regression_tls_segment_alignment_run();      // PT_TLS p_align >= 64 (Android arm64 loadability)
 int test_regression_ct_scalar_inverse_zero_run();   // SEC-001: CT scalar_inverse zero-branch removal (2026-05-21)
@@ -1755,6 +1756,7 @@ static const AuditModule ALL_MODULES[] = {
     // === 2026-09-07 Metal shader include closure (macOS runtime-compile fallback) ===
     { "regression_metal_shader_closure", "Metal shader include closure is complete and fully copied: every quoted include of secp256k1_kernels.metal resolves, SHADER_FILES covers the whole closure, and the loader keeps no hardcoded header list (MSC-1..4)", "memory_safety", test_regression_metal_shader_closure_run, false },
     { "regression_metal_buffer_binding_order", "Metal host dispatch argument order matches each kernel's [[buffer(N)]] parameter order: schnorr_verify_batch bound the message and the x-only pubkey swapped and rejected every valid BIP-340 signature (MBB-1..3)", "memory_safety", test_regression_metal_buffer_binding_order_run, false },
+    { "regression_precompute_noop_reconfigure", "Re-applying an identical FixedBaseConfig keeps the built fixed-base context instead of recomputing the ~250 MB table; a real change still invalidates (PNR-1..4)", "memory_safety", test_regression_precompute_noop_reconfigure_run, false },
     // === 2026-07-21 Metal generic batch fatal-not-invalid regression (#347) ===
     { "regression_metal_batch_sentinel", "Metal ECDSA/Schnorr generic batch verification detects unwritten result buffers and returns GpuError::Launch for CPU fallback instead of emitting signature verdicts (MBS-0..4)", "memory_safety", test_regression_metal_batch_sentinel_run, false },
     // === 2026-07-21 OpenCL collect dispatch/synchronisation regression (#346) ===

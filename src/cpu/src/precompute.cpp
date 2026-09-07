@@ -2704,34 +2704,98 @@ void ensure_built_locked() {
 // copy, environment overrides and invalidation in one critical section avoids
 // racing configure_fixed_base_auto()'s cache-directory preservation with
 // configure_fixed_base() or set_cache_directory().
-void apply_fixed_base_config_locked(const FixedBaseConfig& config) {
-    g_config = config;
+// Field-by-field equality. Deliberately exhaustive rather than a subset of
+// "the fields that shape the table": build_context() snapshots the WHOLE config
+// into ctx->config, and callers read settings back off that snapshot, so
+// keeping a context alive across a change to any field would let g_config and
+// ctx->config disagree. Comparing everything means the only thing this can do
+// is skip work that was provably unnecessary.
+bool same_fixed_base_config(const FixedBaseConfig& a, const FixedBaseConfig& b) {
+    return a.window_bits          == b.window_bits &&
+           a.enable_glv           == b.enable_glv &&
+           a.use_jsf              == b.use_jsf &&
+           a.adaptive_glv         == b.adaptive_glv &&
+           a.glv_min_window_bits  == b.glv_min_window_bits &&
+           a.use_comb             == b.use_comb &&
+           a.comb_width           == b.comb_width &&
+           a.thread_count         == b.thread_count &&
+           a.use_cache            == b.use_cache &&
+           a.cache_path           == b.cache_path &&
+           a.cache_path_set       == b.cache_path_set &&
+           a.cache_dir            == b.cache_dir &&
+           a.max_windows_to_load  == b.max_windows_to_load &&
+           a.progress_callback    == b.progress_callback &&
+           a.autotune             == b.autotune &&
+           a.autotune_iters       == b.autotune_iters &&
+           a.autotune_min_w       == b.autotune_min_w &&
+           a.autotune_max_w       == b.autotune_max_w &&
+           a.autotune_log_path    == b.autotune_log_path &&
+           a.db_path              == b.db_path &&
+           a.bloom_filter_path    == b.bloom_filter_path &&
+           a.fulldb_path          == b.fulldb_path;
+}
 
-    if (g_config.adaptive_glv && g_config.enable_glv &&
-        g_config.window_bits < g_config.glv_min_window_bits) {
-        g_config.enable_glv = false;
+// Apply a configuration, and rebuild the table only if the configuration
+// actually changed.
+//
+// Re-applying the SAME settings used to throw away the built context and
+// recompute it from scratch. That is a real cost -- the default window_bits=18
+// table is ~250 MB -- and callers reasonably configure defensively: Selftest()
+// (src/cpu/src/selftest.cpp) opens with `FixedBaseConfig cfg{}; configure...;
+// ensure_fixed_base_ready();` on EVERY invocation, so a process that ran the
+// selftest eight times rebuilt the table eight times.
+//
+// This went unnoticed while the disk cache defaulted on: each "rebuild" was a
+// load of cache_w18.bin rather than a recomputation. Turning that default off
+// (evoskuil's report: the file was being left in the caller's working
+// directory) removed the padding and exposed the waste -- audit/
+// test_exploit_selftest_api went from 6.6 s to a 120 s CI timeout, and the
+// whole ctest suite from 496 s to 1670 s. Measured on this tree, one binary,
+// SECP256K1_FIXED_BASE_DISK_CACHE toggled and nothing else:
+//   cache ON, cold  6.0 s     cache ON, warm  4.3 s     cache OFF  23.8-24.3 s
+//
+// The cache is not the fix and neither is a longer timeout: a no-op
+// reconfiguration should not be a quarter-gigabyte of arithmetic.
+void apply_fixed_base_config_locked(const FixedBaseConfig& config) {
+    FixedBaseConfig incoming = config;
+
+    if (incoming.adaptive_glv && incoming.enable_glv &&
+        incoming.window_bits < incoming.glv_min_window_bits) {
+        incoming.enable_glv = false;
     }
 
+    // Environment overrides are folded in BEFORE the comparison: they are part
+    // of the effective configuration, so a second call with the same argument
+    // and the same environment has to compare equal.
     if (const char* env_dir = std::getenv("SECP256K1_CACHE_DIR")) {
         if (*env_dir && std::string(env_dir).find("..") == std::string::npos) {
-            g_config.cache_dir = env_dir;
+            incoming.cache_dir = env_dir;
         }
     }
     if (const char* env_path = std::getenv("SECP256K1_CACHE_PATH")) {
         if (*env_path && std::string(env_path).find("..") == std::string::npos) {
-            g_config.cache_path = env_path;
-            g_config.cache_path_set = true;
+            incoming.cache_path = env_path;
+            incoming.cache_path_set = true;
         }
     }
     if (const char* env_maxw = std::getenv("SECP256K1_MAX_WINDOWS")) {
         auto const value =
             static_cast<unsigned>(std::strtoul(env_maxw, nullptr, 10));
         if (value > 0U) {
-            g_config.max_windows_to_load = value;
+            incoming.max_windows_to_load = value;
         }
     }
 
-    invalidate_context_locked();
+    // A context that does not exist yet cannot be kept, so the first call
+    // through here always falls through to invalidate.
+    bool const unchanged =
+        g_context_owner && same_fixed_base_config(incoming, g_config);
+
+    g_config = incoming;
+
+    if (!unchanged) {
+        invalidate_context_locked();
+    }
 }
 
 PrecomputeContext const& acquire_context_for_current_thread() {

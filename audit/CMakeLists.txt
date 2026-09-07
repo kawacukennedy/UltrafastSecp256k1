@@ -5815,6 +5815,26 @@ if(TARGET fastsecp256k1_gh336_test_hooks)
 endif()
 target_sources(unified_audit_runner PRIVATE test_regression_precompute_gcontext_race.cpp)
 
+# -- No-op reconfigure must not rebuild the fixed-base table -------------------
+# configure_fixed_base() invalidated unconditionally, so Selftest()'s defensive
+# `configure_fixed_base(FixedBaseConfig{})` on every call rebuilt the ~250 MB
+# window-18 table each time. Invisible while the disk cache defaulted on (the
+# rebuild was a disk load); a 120 s ctest timeout once it defaulted off.
+# Needs the issue #336 diagnostic hooks to observe context identity/epoch.
+if(TARGET fastsecp256k1_gh336_test_hooks)
+    add_executable(test_regression_precompute_noop_reconfigure_standalone
+        test_regression_precompute_noop_reconfigure.cpp
+        $<TARGET_OBJECTS:fastsecp256k1_gh336_test_hooks>)
+    audit_target_defaults(test_regression_precompute_noop_reconfigure_standalone)
+    target_compile_definitions(test_regression_precompute_noop_reconfigure_standalone PRIVATE
+        STANDALONE_TEST SECP256K1_PRECOMPUTE_TEST_HOOKS=1)
+    add_test(NAME regression_precompute_noop_reconfigure
+        COMMAND test_regression_precompute_noop_reconfigure_standalone)
+    set_tests_properties(regression_precompute_noop_reconfigure PROPERTIES TIMEOUT 60
+        LABELS "audit;regression;performance;precompute")
+endif()
+target_sources(unified_audit_runner PRIVATE test_regression_precompute_noop_reconfigure.cpp)
+
 # SOUNDNESS-PROBE (GHSA-c7q2) — negative-soundness gate seed (2026-06-11)
 # advisory=false: forged adaptor pre-sig with mismatched dlog must be rejected by the DLEQ.
 add_executable(test_soundness_adaptor_dleq_forgery_standalone

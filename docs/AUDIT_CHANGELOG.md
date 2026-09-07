@@ -1,5 +1,86 @@
 # Audit Changelog
 
+## 2026-09-07 - a no-op `configure_fixed_base()` rebuilt the whole fixed-base table
+
+`configure_fixed_base()` called `invalidate_context_locked()` unconditionally,
+so re-applying the SAME settings threw away the built table and recomputed it.
+The library's own `Selftest()` (src/cpu/src/selftest.cpp:1301-1317) opens with
+
+```cpp
+FixedBaseConfig cfg{};
+... optional env overrides ...
+configure_fixed_base(cfg);
+ensure_fixed_base_ready();
+```
+
+on EVERY invocation, so `audit/test_exploit_selftest_api.cpp` -- which runs the
+selftest eight times to prove idempotency -- rebuilt the ~250 MB
+`window_bits=18` table eight times.
+
+**Why it was invisible until now.** While `use_cache` defaulted to true, each
+"rebuild" was a load of `cache_w18.bin` rather than a recomputation, so the
+waste was I/O nobody measured. Turning that default off (3b612081, because the
+file was being left in the caller's working directory -- evoskuil's report)
+removed the padding, and the cost surfaced on every platform at once:
+
+| | 108e810e | e0ed21f0 |
+|---|---|---|
+| `exploit_selftest_api`, linux gcc-14 Release | 6.57 s | ***Timeout 120 s |
+| full ctest suite, same job | 496 s | 1670 s |
+
+`exploit_selftest_api` timed out on linux, windows, macOS and rocm alike;
+windows additionally lost `metamorphic_adaptor` and
+`soundness_snark_witness_attestation` to the same pressure.
+
+**The measurement that identified it.** One binary, one build directory,
+`SECP256K1_FIXED_BASE_DISK_CACHE` toggled and nothing else changed:
+
+```
+cache ON,  cold (empty dir, builds + writes 255 MB)   6.0 s
+cache ON,  warm (loads)                               4.3 s
+cache OFF                                     23.8 - 24.3 s
+```
+
+A cold build that also writes a quarter-gigabyte finishing 4x faster than one
+that writes nothing is not a cache-hit-rate story -- it is the same table being
+built several times.
+
+**The fix is not the cache and not a longer timeout.** `configure_fixed_base()`
+now compares the incoming effective configuration (after adaptive-GLV
+adjustment and environment overrides) against the one in force, field by field,
+and invalidates only on a real change. Same binary, after:
+
+```
+exploit_selftest_api   24.7 s -> 2.2 s      peak RSS 557 MB -> 280 MB
+```
+
+which is also faster than the 6.57 s it took when the disk cache was masking
+the problem.
+
+The comparison is exhaustive rather than restricted to "fields that shape the
+table": `build_context()` snapshots the whole config into `ctx->config` and
+callers read settings back off that snapshot, so keeping a context across a
+change to any field would let `g_config` and `ctx->config` disagree.
+
+**New module: `regression_precompute_noop_reconfigure`** (PNR-1..4), using the
+issue #336 `SECP256K1_PRECOMPUTE_TEST_HOOKS` identity/epoch surface:
+
+- PNR-1 an identical config keeps the same context identity and epoch
+- PNR-2 NEGATIVE CONTROL -- changing `window_bits` still invalidates and
+  republishes, so PNR-1 cannot be satisfied by never invalidating
+- PNR-3 a config differing only in a non-table field still invalidates
+- PNR-4 `1*G` through the surviving table is still `G`
+
+Proof it blocks -- restoring the unconditional `invalidate_context_locked()`:
+
+```
+  [FAIL] PNR-1: re-applying an identical FixedBaseConfig keeps the SAME context
+  [FAIL] PNR-1: re-applying an identical FixedBaseConfig does not bump the epoch
+  6/8 checks passed
+```
+
+reverted: 8/8.
+
 ## 2026-09-07 - Metal `schnorr_verify_batch` rejected every valid signature (buffer binding swapped)
 
 The Metal host bound its dispatch arguments in the wrong order:

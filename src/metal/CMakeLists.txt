@@ -183,8 +183,15 @@ target_compile_features(metal_audit_runner PRIVATE cxx_std_20)
 # Find Metal compiler (xcrun metal)
 find_program(METAL_COMPILER xcrun)
 
+# The shader SOURCE directory, which exists whether or not a Metal compiler
+# does. It used to be set only inside if(METAL_COMPILER), while the
+# SHADER_FILES copy list below sits outside that guard -- so on any build
+# without xcrun (a non-Apple host with SECP256K1_BUILD_METAL=ON, or an Apple
+# host without the Xcode command-line tools) every entry expanded to a bare
+# "/secp256k1_*.h" at the filesystem root.
+set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+
 if(METAL_COMPILER)
-    set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
     set(METAL_SOURCE ${SHADER_DIR}/secp256k1_kernels.metal)
     set(METAL_AIR ${CMAKE_CURRENT_BINARY_DIR}/secp256k1_kernels.air)
     set(METAL_LIB ${CMAKE_CURRENT_BINARY_DIR}/secp256k1_kernels.metallib)

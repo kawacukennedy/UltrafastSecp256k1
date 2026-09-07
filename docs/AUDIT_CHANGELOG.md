@@ -1,5 +1,71 @@
 # Audit Changelog
 
+## 2026-09-07 - the libsecp comparison base was mislabelled, and the 2026-09-03 ratios are not reproducible
+
+Refreshing the canonical benchmark turned up two things about the comparison
+itself. Neither is a code regression.
+
+**1. The comparison target was never v0.8.0.**
+
+`docs/bench_unified_2026-09-03_gcc14_x86-64.json` recorded
+`libsecp_version: "v0.8.0 (PR #1859 force-inline)"`, and README repeated it.
+The checkout it actually measured is:
+
+```
+$ git -C _research_repos/secp256k1 describe --tags
+v0.7.0-257-gf9a944f            # f9a944f, 2025-12-19
+$ git tag --contains HEAD
+v0.8.0                         # v0.8.0 CONTAINS this commit -- it is not in it
+$ git log --oneline --grep=1859
+(no match)                     # the force-inline PR the label credits is absent
+```
+
+The clone has not moved since 2025-12-25 (single `clone` reflog entry, source
+mtimes to match), so this was mislabelled from the start rather than drifting.
+The 2026-09-07 artifact records the commit, the `git describe`, and the fact
+that v0.8.0 contains it; canonical_numbers.json gains `_libsecp_reference` with
+the same identity. The three historical mentions in this changelog are left as
+written -- they record what was believed at the time.
+
+**2. The 2026-09-03 ratios do not reproduce on the same commit.**
+
+The 2026-09-03 tree (`c7d987b0`) was rebuilt in a detached worktree with
+identical flags and re-measured today:
+
+| Ultra vs libsecp | 2026-09-03 artifact | c7d987b0 today | dev today |
+|---|---|---|---|
+| CT ECDSA sign | 1.34x | **1.50x** | 1.52x |
+| CT Schnorr sign | 1.27x | **1.45x** | 1.48x |
+| ECDSA verify | 1.00x | **1.15x** | 1.13x |
+| point_add (J+A mixed) | 0.97x | **1.17x** | 1.17x |
+| point_dbl | 1.14x | **1.31x** | 1.29x |
+| serialize 65B | 2.17x | **3.15x** | 3.19x |
+
+The old tree and the new tree agree with each other and both disagree with the
+recorded artifact. So the shift sits between the 2026-09-03 measurement and
+today's environment, not in any code merged since. What changed on the host is
+not established here; the libsecp source is byte-identical in all three cases.
+
+Practical consequence: **2026-09-03 is not a usable regression baseline.** A
+"regression vs 2026-09-03" is not evidence without re-measuring that commit
+alongside, which is what this entry did.
+
+**What our code actually did.** Comparing c7d987b0 to dev, both measured today,
+the Ultra-vs-libsecp ratios are flat except where we changed something:
+`scalar from_bytes` 0.77x -> 1.09x (the `__int128` gating in `Scalar::from_bytes`)
+and `field add` 1.39x -> 1.67x. No ratio moved backwards.
+
+One genuine own-code regression stands, unrelated to libsecp:
+`FE52::inverse_safegcd` 1188 -> 1538 ns (+29.4%), inter-run spread 0.4% across
+five clean runs. Not yet investigated.
+
+**Methodology note.** libsecp is compiled INTO the benchmark binary --
+`src/cpu/bench/libsecp_provider.c` does `#include "secp256k1.c"` -- with
+`-O3 -march=native`, no LTO. Its numbers are therefore not independent of our
+build. Also: `bench_unified` is silently not created when `LIBSECP_SRC_DIR`
+does not resolve (it is a relative path four levels up), so the benchmark can
+vanish from a build with no error.
+
 ## 2026-09-07 — two audit tests were fail-closing Metal for everything that ran after them
 
 `CI / macos (Release)` kept failing `gpu_abi_gate`, `gpu_collect_verify_parity`

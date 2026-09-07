@@ -184,18 +184,15 @@ using namespace fe52_constants;
 // under LTO (GCC already emits MULX/ADCX/ADOX from __int128) — kb GLV52-VAR-TABLE-001.
 //
 // SUPERSEDED as an instruction, kept for the reasoning. This block used to say
-// "Do NOT use SECP256K1_FE52_FORCE_INLINE (always_inline) here", which the
-// shipped x86-64 default has contradicted since the inlining A/B below: at
-// UFSECP_FE52_FORCE_INLINE_KERNELS=1 these kernels ARE always_inline. Read the
-// "Field-kernel inlining policy" block further down for the current rule; this
-// paragraph explains only what the optimize("O2") attribute is still doing on
-// the non-force-inline path.
+// "Do NOT use SECP256K1_FE52_FORCE_INLINE (always_inline) here". The A/B below
+// contradicted it on x86-64 and then on arm64, and the kernels are now
+// always_inline everywhere this header compiles. Read the "Field-kernel
+// inlining policy" block further down for the current rule.
 //
-// With always_inline the function is inlined into every caller and compiled at
-// the caller's optimization level, which is why the optimize("O2") attribute
-// applies only when the kernel is left out of line. As a non-inlined static
-// function compiled at O2, the __int128 arithmetic keeps the same shape in
-// Debug and coverage builds that would otherwise compile it at -O0.
+// The optimize("O2") attribute this paragraph used to explain is gone with the
+// out-of-line path: always_inline means the body is compiled at the caller's
+// optimization level, so there is no out-of-line function left for an
+// attribute to apply to.
 //
 // That attribute is GCC-only in effect. Clang does not implement optimize():
 // it emits "unknown attribute 'optimize' ignored [-Wunknown-attributes]" and
@@ -245,31 +242,43 @@ using namespace fe52_constants;
 // unchanged to 0.00% in both libraries -- it is that removing the call boundary
 // lets the caller schedule the 64x64->128 arithmetic alongside its own work.
 //
-// COST: libfastsecp256k1.a grows 14.84% (libsecp reported 4.6%; this engine has
-// roughly three times the field-mul call sites). That is why this is ON only
-// where it has been measured. ARM64, RISC-V and the embedded targets have far
-// smaller instruction caches and much tighter flash budgets, and the experiment
-// has NOT been run on them -- enabling it there is a guess, not a result. Run
-// the same warm-vs-warm A/B on the real device before flipping the default.
+// COST: libfastsecp256k1.a grows 14.84% on x86-64 and 22.4% on arm64. The size
+// is the price; see the measured table below for what it buys.
 //
-// Override either way by defining the macro for EVERY translation unit in the
-// binary, e.g.
-//     cmake -DCMAKE_CXX_FLAGS=-DUFSECP_FE52_FORCE_INLINE_KERNELS=1 ...
-// It must be the same value everywhere: FieldElement52::operator* and friends
-// are always_inline external-linkage inlines whose bodies call these kernels,
-// so a binary built half one way and half the other is an ODR mismatch, not a
-// diagnostic. There is no CMake option for this yet -- see GitHub issue #336.
+// There is no longer a macro to set. It used to be settable per build, which
+// was also an ODR hazard: FieldElement52::operator* and friends are
+// always_inline external-linkage inlines whose bodies call these kernels, so a
+// binary built half one way and half the other was a silent mismatch rather
+// than a diagnostic. One shape everywhere removes that failure mode.
 //
-// On targets without __int128 (ESP32/STM32/Emscripten and anything else where
-// point.hpp does not include field_52.hpp) this header is never compiled and
-// the macro is inert.
-#if !defined(UFSECP_FE52_FORCE_INLINE_KERNELS)
-#  if defined(__x86_64__) || defined(_M_X64)
-#    define UFSECP_FE52_FORCE_INLINE_KERNELS 1
-#  else
-#    define UFSECP_FE52_FORCE_INLINE_KERNELS 0
-#  endif
-#endif
+// The kernels are always_inline on every target that compiles this header.
+//
+// This used to be UFSECP_FE52_FORCE_INLINE_KERNELS, on for x86-64 and off
+// everywhere else, with the note above asking for a warm-vs-warm A/B on real
+// ARM64 hardware before flipping the default. That A/B has now been run, on a
+// Rockchip RK3588 Cortex-A76 over adb, governor pinned to performance, three
+// interleaved rounds, cpu7 (big core):
+//
+//     op                 noinline            always_inline        delta
+//     fe52_sqr           72.03/72.05/72.32   66.53/66.57/66.59    -7.7%
+//     ecdsa_verify       153931/154102/...   148803/148855/...    -3.4%
+//     scalar_mul k*P     20658/20560/20550   20152/20167/20164    -2.0%
+//     ecdsa_sign         63513/63557/63569   62239/62267/62283    -2.0%
+//     fe52_mul           99.85/99.91/100.23  98.45/98.51/98.53    -1.5%
+//     generator_mul k*G  2701/2706/2699      2699/2701/2702       ~0%
+//
+// Non-overlapping ranges on the first four. Smaller than the x86-64 result (90
+// of 104 ops above 2%) but the same direction, so there is no target left where
+// the flag was measured to be worth keeping off, and the two-configuration ODR
+// hazard the note below describes goes away with it.
+//
+// COST: libfastsecp256k1.a grows 14.84% on x86-64 and 22.4% on arm64
+// (18.77 MB -> 22.98 MB, measured on the same NDK build). That is the trade.
+//
+// Targets without __int128 (ESP32/STM32/Emscripten, where point.hpp does not
+// include field_52.hpp) never compile this header, so they are unaffected.
+// RISC-V has not been measured, but SECP256K1_RISCV_FE52_V1 routes it to
+// hand-written assembly kernels below rather than this C++ body.
 
 // ALIASING CONTRACT: r, a and b must not alias. That is stricter than
 // libsecp256k1, which permits r == a, and it is kept deliberately: relaxing it so
@@ -284,22 +293,7 @@ using namespace fe52_constants;
 // on the constant-time path (ct_point.cpp's global-Z rescales) measured
 // -8.9% on ct::generator_mul and -6.4% on ct::ecdsa_sign. Look for the pattern
 // at the CALL SITES, not in these wrappers.
-#if UFSECP_FE52_FORCE_INLINE_KERNELS
 SECP256K1_FE52_FORCE_INLINE
-// __GNUC__ first, and explicitly not clang: clang defines __GNUC__ too, and it
-// does NOT implement optimize() -- it emits "unknown attribute 'optimize'
-// ignored [-Wunknown-attributes]" and compiles as if only noinline were there.
-// Keeping the clause on clang bought nothing and cost two warnings per
-// translation unit on every ARM64 clang build. See the policy block above.
-#elif defined(__GNUC__) && !defined(__clang__)
-__attribute__((optimize("O2"), noinline))
-static
-#elif defined(__clang__)
-__attribute__((noinline))
-static
-#else
-SECP256K1_FE52_FORCE_INLINE
-#endif
 void fe52_mul_inner(std::uint64_t* SECP256K1_RESTRICT r,
                     const std::uint64_t* SECP256K1_RESTRICT a,
                     const std::uint64_t* SECP256K1_RESTRICT b) noexcept {
@@ -1505,22 +1499,7 @@ void fe52_mul_inner_var(std::uint64_t* SECP256K1_RESTRICT r,
 // the finding that O3 emits byte-identical code. Disassembled at
 // -O3 -march=native: 164 instructions, 21 multiplies (12.8%), 70 mov/push/pop
 // (42.7%) -- the same data-movement-dominated shape.
-#if UFSECP_FE52_FORCE_INLINE_KERNELS
 SECP256K1_FE52_FORCE_INLINE
-// __GNUC__ first, and explicitly not clang: clang defines __GNUC__ too, and it
-// does NOT implement optimize() -- it emits "unknown attribute 'optimize'
-// ignored [-Wunknown-attributes]" and compiles as if only noinline were there.
-// Keeping the clause on clang bought nothing and cost two warnings per
-// translation unit on every ARM64 clang build. See the policy block above.
-#elif defined(__GNUC__) && !defined(__clang__)
-__attribute__((optimize("O2"), noinline))
-static
-#elif defined(__clang__)
-__attribute__((noinline))
-static
-#else
-SECP256K1_FE52_FORCE_INLINE
-#endif
 void fe52_sqr_inner(std::uint64_t* SECP256K1_RESTRICT r,
                     const std::uint64_t* SECP256K1_RESTRICT a) noexcept {
 #if defined(SECP256K1_RISCV_FE52_V1)

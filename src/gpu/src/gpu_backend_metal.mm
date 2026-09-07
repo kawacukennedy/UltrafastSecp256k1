@@ -795,7 +795,10 @@ public:
         auto err = ensure_library();
         if (err != GpuError::Ok) return err;
 
-        /* schnorr_verify_batch: pubkeys_x (N×32), msgs (N×32), sigs (N×64) */
+        /* schnorr_verify_batch kernel signature, in [[buffer(N)]] order:
+         *   0 msg_hashes (N×32)  1 pubkeys_x (N×32)  2 signatures (N×64)
+         *   3 results (N×uint32) 4 count
+         * The dispatch list below must be in that order. */
         auto buf_pks  = runtime_->alloc_buffer_shared(count * 32);
         auto buf_msgs = runtime_->alloc_buffer_shared(count * 32);
         auto buf_sigs = runtime_->alloc_buffer_shared(count * 64);
@@ -823,7 +826,7 @@ public:
         for (size_t i = 0; i < count; ++i) res_seed[i] = kUnwritten;
 
         if (!runtime_->dispatch_sync_checked(pipe, (uint32_t)count, 64u,
-                                 {&buf_pks, &buf_msgs, &buf_sigs, &buf_res, &buf_count})) {
+                                 {&buf_msgs, &buf_pks, &buf_sigs, &buf_res, &buf_count})) {
             std::memset(out_results, 0, count);
             return set_error(GpuError::Launch,
                               "Metal: schnorr_verify_batch dispatch failed (GPU command-buffer error)");

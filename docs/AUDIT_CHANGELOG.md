@@ -1,5 +1,63 @@
 # Audit Changelog
 
+## 2026-09-07 - Metal `schnorr_verify_batch` rejected every valid signature (buffer binding swapped)
+
+The Metal host bound its dispatch arguments in the wrong order:
+
+```
+host:    {buf_pks, buf_msgs, buf_sigs, buf_res, buf_count}
+kernel:   msg_hashes[[0]], pubkeys_x[[1]], signatures[[2]], results[[3]], count[[4]]
+```
+
+so `schnorr_verify_batch` verified every row with the message and the x-only
+public key exchanged, and returned 0 for correct BIP-340 signatures. ECDSA was
+bound correctly (`{buf_msgs, buf_pubs, ...}`) and was never affected.
+
+**Not a false-accept.** Swapping the pair cannot make an invalid signature
+verify other than with negligible probability, so nothing was ever wrongly
+accepted. The effect is that GPU Schnorr batch verify returned "invalid" for
+everything on Apple hardware — a correctness and availability defect, not a
+signature-forgery one. The `collect` sibling
+(`lbtc_schnorr_verify_collect`) binds correctly and was right the whole time,
+which is precisely how the parity test found this.
+
+**Why it survived.** `audit/test_gpu_collect_verify_parity.cpp` cross-checks
+collect against verify_batch per row and catches it exactly — but needs a Metal
+device, and `CI / macos (Release)` never reached it: two audit tests were
+leaking a fail-closed shader-path override (5546119c), and after that the audit
+binary stopped building at all (49d9c96c). On the first macOS run that both
+built and executed the suite, the parity test failed 3 of its 24 checks:
+
+```
+FAIL: schnorr collect == verify_batch verdict per-row (valid corpus)
+FAIL: schnorr collect: untouched row key_buffer[0]==0 & batch[0]==1
+FAIL: schnorr collect == verify_batch verdict per-row (tampered corpus)
+[gpu_collect_verify_parity] pass=21 fail=3
+```
+
+**New module: `regression_metal_buffer_binding_order`** (MBB-1..3). The parity
+test needs a GPU; this one reads the shader sources and the host backend and
+checks that all 32 dispatch sites bind in their kernel's `[[buffer(N)]]` order.
+It runs on every platform with no Metal device and no Apple toolchain, which is
+the point — a binding-order swap is a source-level mistake and does not need
+hardware to catch.
+
+MBB-3 matches abbreviated host names (`buf_sigs`) against kernel parameter
+names (`signatures`) by prefix/token overlap, with an explicit alias table where
+the two vocabularies genuinely differ. The table is deliberately narrow: no
+entry maps a key-shaped buffer onto a message-shaped parameter, which is what
+makes the original swap fail rather than alias its way through.
+
+Proof it bites — restoring the shipped order and re-running the built module:
+
+```
+  [FAIL] MBB-3: schnorr_verify_batch buffer(0) -- host 'buf_pks' is the kernel's 'msg_hashes'
+  [FAIL] MBB-3: schnorr_verify_batch buffer(1) -- host 'buf_msgs' is the kernel's 'pubkeys_x'
+  236/238 checks passed
+```
+
+reverted: 238/238.
+
 ## 2026-09-07 - the libsecp comparison base was mislabelled, and the 2026-09-03 ratios are not reproducible
 
 Refreshing the canonical benchmark turned up two things about the comparison

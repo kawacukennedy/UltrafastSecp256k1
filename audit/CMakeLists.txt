@@ -3644,6 +3644,23 @@ add_test(NAME regression_metal_shader_closure
 set_tests_properties(regression_metal_shader_closure PROPERTIES
     TIMEOUT 60 LABELS "audit;regression;metal;shaders")
 
+# -- Metal dispatch buffer-binding order --------------------------------------
+# schnorr_verify_batch bound {pks, msgs, ...} against a kernel declaring
+# {msg_hashes, pubkeys_x, ...}, so every valid BIP-340 signature was verified
+# with the message and the key swapped and rejected. Source scan for the same
+# reason as the closure test above: the GPU parity test that catches this needs
+# a Metal device, and macOS CI could not reach it.
+add_executable(test_regression_metal_buffer_binding_order_standalone
+    test_regression_metal_buffer_binding_order.cpp)
+audit_target_defaults(test_regression_metal_buffer_binding_order_standalone)
+target_compile_definitions(test_regression_metal_buffer_binding_order_standalone PRIVATE
+    STANDALONE_TEST
+    UFSECP_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+add_test(NAME regression_metal_buffer_binding_order
+    COMMAND test_regression_metal_buffer_binding_order_standalone)
+set_tests_properties(regression_metal_buffer_binding_order PROPERTIES
+    TIMEOUT 60 LABELS "audit;regression;metal;shaders")
+
 # -- Fixed-base cache lifecycle (evoskuil: cache_w18.bin left behind) ----------
 add_executable(test_regression_fixed_base_cache_lifecycle_standalone
     test_regression_fixed_base_cache_lifecycle.cpp)
@@ -4440,6 +4457,7 @@ add_executable(unified_audit_runner
     test_regression_hmac_guard_fail_closed.cpp
     # Regression: the Metal shader include closure is complete and copied.
     test_regression_metal_shader_closure.cpp
+    test_regression_metal_buffer_binding_order.cpp
     # Regression: fixed-base cache does not litter the working directory.
     test_regression_fixed_base_cache_lifecycle.cpp
     # Regression: PT_TLS alignment >= 64 so Android arm64 can load the image.

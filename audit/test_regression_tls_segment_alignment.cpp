@@ -60,6 +60,7 @@ static int g_pass = 0, g_fail = 0;
 #  define UFSECP_TLS_ALIGN_TEST_SUPPORTED 1
 #  include <elf.h>
 #  include <link.h>
+#  include <sys/auxv.h>
 #else
 #  define UFSECP_TLS_ALIGN_TEST_SUPPORTED 0
 #endif
@@ -74,19 +75,32 @@ struct TlsScan {
     std::uint64_t memsz = 0;
 };
 
-// dl_iterate_phdr's first callback is the main executable, which is the object
-// whose PT_TLS alignment Bionic checks.
-int scan_main_object(struct dl_phdr_info* info, std::size_t, void* out) {
-    auto* r = static_cast<TlsScan*>(out);
-    for (int i = 0; i < info->dlpi_phnum; ++i) {
-        const auto& ph = info->dlpi_phdr[i];
-        if (ph.p_type == PT_TLS) {
-            r->found = true;
-            r->align = static_cast<std::uint64_t>(ph.p_align);
-            r->memsz = static_cast<std::uint64_t>(ph.p_memsz);
+// Read the MAIN EXECUTABLE's program headers straight from the auxiliary
+// vector, which is where the kernel put them and what the loader itself reads.
+//
+// The obvious alternative, dl_iterate_phdr with the callback stopping at the
+// first object, is wrong: it assumes the first object enumerated is the main
+// executable. That holds on glibc and does NOT hold on Bionic, where this
+// module reported "no PT_TLS segment" on an Android arm64 binary whose
+// readelf output plainly showed `TLS ... R 0x40`. A silent skip on the one
+// platform the check exists for is worse than no check, so it reads AT_PHDR.
+TlsScan scan_own_program_headers() {
+    TlsScan r;
+    const auto phdr  = static_cast<unsigned long>(getauxval(AT_PHDR));
+    const auto phnum = static_cast<unsigned long>(getauxval(AT_PHNUM));
+    const auto phent = static_cast<unsigned long>(getauxval(AT_PHENT));
+    if (phdr == 0 || phnum == 0 || phent < sizeof(ElfW(Phdr))) return r;
+
+    const auto* base = reinterpret_cast<const unsigned char*>(phdr);
+    for (unsigned long i = 0; i < phnum; ++i) {
+        const auto* ph = reinterpret_cast<const ElfW(Phdr)*>(base + i * phent);
+        if (ph->p_type == PT_TLS) {
+            r.found = true;
+            r.align = static_cast<std::uint64_t>(ph->p_align);
+            r.memsz = static_cast<std::uint64_t>(ph->p_memsz);
         }
     }
-    return 1;  // stop after the main object
+    return r;
 }
 
 #endif  // UFSECP_TLS_ALIGN_TEST_SUPPORTED
@@ -121,8 +135,7 @@ int test_regression_tls_segment_alignment_run() {
         (void)sink;
     }
 
-    TlsScan scan;
-    dl_iterate_phdr(scan_main_object, &scan);
+    TlsScan const scan = scan_own_program_headers();
 
     // No PT_TLS at all is a legitimate outcome for a binary that pulled in none
     // of this library's thread_local objects; there is nothing for the loader to

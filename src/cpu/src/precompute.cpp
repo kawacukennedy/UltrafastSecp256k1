@@ -648,7 +648,22 @@ std::shared_ptr<PrecomputeContext> g_context;
 // mutex-owned owner, so an in-flight reader remains protected by its TLS owner.
 std::shared_ptr<PrecomputeContext> g_context_owner;
 std::atomic<PrecomputeContext const*> g_published_context{nullptr};
-thread_local std::shared_ptr<PrecomputeContext const> tl_context_owner;
+// alignas(64): required for Android arm64, and right on its own merits.
+//
+// Bionic refuses to load an executable whose PT_TLS segment is aligned below
+// 64 bytes on arm64 ("executable's TLS segment is underaligned: alignment is 8,
+// needs to be at least 64 for ARM64 Bionic"). Every thread_local in this
+// library is naturally 8- or 16-aligned, so the segment came out at 8 and ANY
+// Android arm64 executable linking libfastsecp256k1 failed to start. Verified
+// on a Rockchip RK3588 (Cortex-A76) with a plain benchmark binary; the CI
+// android(arm64-v8a) job only cross-compiles and never executes on a device,
+// which is why this was never caught.
+//
+// Raising this one object to a cache line fixes the segment alignment for the
+// whole library, and it is the object worth aligning: it is the per-thread hot
+// owner on the issue #336 acquisition path, so a cache line of its own also
+// keeps it off a line shared with another thread's state.
+alignas(64) thread_local std::shared_ptr<PrecomputeContext const> tl_context_owner;
 
 static_assert(
     std::atomic<PrecomputeContext const*>::is_always_lock_free,

@@ -3648,6 +3648,17 @@ add_test(NAME regression_fixed_base_cache_lifecycle
 set_tests_properties(regression_fixed_base_cache_lifecycle PROPERTIES
     TIMEOUT 120 LABELS "audit;regression;precompute;cache")
 
+# -- PT_TLS alignment (Android arm64 could not load any binary at all) --------
+add_executable(test_regression_tls_segment_alignment_standalone
+    test_regression_tls_segment_alignment.cpp)
+audit_target_defaults(test_regression_tls_segment_alignment_standalone)
+target_compile_definitions(test_regression_tls_segment_alignment_standalone PRIVATE
+    STANDALONE_TEST)
+add_test(NAME regression_tls_segment_alignment
+    COMMAND test_regression_tls_segment_alignment_standalone)
+set_tests_properties(regression_tls_segment_alignment PROPERTIES
+    TIMEOUT 30 LABELS "audit;regression;android;abi;tls")
+
 # -- P1-SEC-001: FROST frost_sign absent signer ID (FSI-1..3) — 2026-05-21 --
 if(SECP256K1_BUILD_FROST)
 add_executable(test_exploit_frost_absent_signer_id_standalone
@@ -4424,6 +4435,8 @@ add_executable(unified_audit_runner
     test_regression_metal_shader_closure.cpp
     # Regression: fixed-base cache does not litter the working directory.
     test_regression_fixed_base_cache_lifecycle.cpp
+    # Regression: PT_TLS alignment >= 64 so Android arm64 can load the image.
+    test_regression_tls_segment_alignment.cpp
     # SEC-001: CT scalar_inverse zero-branch removal (2026-05-21)
     # Removes data-dependent if(is_zero) branch in non-int128 Fermat fallback.
     test_regression_ct_scalar_inverse_zero.cpp

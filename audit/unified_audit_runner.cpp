@@ -225,6 +225,7 @@ int test_exploit_ecdsa_pmn_wraparound_run();          // ECDSA PMN wraparound: r
 int test_exploit_custom_nonce_injection_run();        // RFC 6979 nonce edge cases (null/zero/n/n-1)
 int test_regression_ct_blinding_nonce_path_run();    // CT nonce path uses generator_mul_blinded (2026-05-12)
 int test_regression_hmac_guard_fail_closed_run();    // RFC 6979 HMAC length guards zero out[32] before returning
+int test_regression_metal_shader_closure_run();      // Metal shader include closure complete + copied
 int test_regression_ct_scalar_inverse_zero_run();   // SEC-001: CT scalar_inverse zero-branch removal (2026-05-21)
 int test_regression_ct_ops_run();                   // SEC-002/007/008/010, CT-004/005: CT ops regressions (consolidated 2026-06-09 — was split across two byte-identical files)
 int test_regression_bip324_privkey_lifetime_run();  // SEC-006: Bip324Session privkey_ lifetime documentation (2026-05-21)
@@ -1744,6 +1745,8 @@ static const AuditModule ALL_MODULES[] = {
     { "regression_metal_snark_readiness", "Metal ECDSA/Schnorr SNARK witness methods reject an uninitialised runtime with GpuError::Device before count/null handling or buffer allocation (MSR-0..3)", "memory_safety", test_regression_metal_snark_readiness_run, false },
     // === 2026-07-21 CUDA batch allocation lifetime regression (#345) ===
     { "regression_cuda_buffer_raii", "CUDA ECDSA/Schnorr verify, FROST partial verify, and ECDSA/Schnorr SNARK witness allocations are RAII-owned across every CUDA_TRY early return (CBR-0..8)", "memory_safety", test_regression_cuda_buffer_raii_run, false },
+    // === 2026-09-07 Metal shader include closure (macOS runtime-compile fallback) ===
+    { "regression_metal_shader_closure", "Metal shader include closure is complete and fully copied: every quoted include of secp256k1_kernels.metal resolves, SHADER_FILES covers the whole closure, and the loader keeps no hardcoded header list (MSC-1..4)", "memory_safety", test_regression_metal_shader_closure_run, false },
     // === 2026-07-21 Metal generic batch fatal-not-invalid regression (#347) ===
     { "regression_metal_batch_sentinel", "Metal ECDSA/Schnorr generic batch verification detects unwritten result buffers and returns GpuError::Launch for CPU fallback instead of emitting signature verdicts (MBS-0..4)", "memory_safety", test_regression_metal_batch_sentinel_run, false },
     // === 2026-07-21 OpenCL collect dispatch/synchronisation regression (#346) ===

@@ -127,7 +127,8 @@ if(SECP256K1_BUILD_METAL AND TARGET secp256k1_metal_lib)
     # so without it they keep the CWD-relative search that cannot reach
     # <build>/src/metal from <build>/audit -- which is where ctest runs them.
     target_compile_definitions(audit_gpu_backends_provider INTERFACE
-        "UFSECP_METAL_METALLIB_DIR=\"${CMAKE_BINARY_DIR}/src/metal\"")
+        "UFSECP_METAL_METALLIB_DIR=\"${CMAKE_BINARY_DIR}/src/metal\""
+        "UFSECP_METAL_SHADER_SRC_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../src/metal/shaders\"")
     target_link_libraries(audit_gpu_backends_provider INTERFACE secp256k1_metal_lib)
     target_include_directories(audit_gpu_backends_provider INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/metal/include)
@@ -3615,6 +3616,22 @@ add_test(NAME regression_hmac_guard_fail_closed
 set_tests_properties(regression_hmac_guard_fail_closed PROPERTIES
     TIMEOUT 60 LABELS "audit;regression;rfc6979;hmac;fail-closed")
 
+# -- Metal shader include closure ---------------------------------------------
+# The runtime-shader-compile fallback in gpu_backend_metal.mm could never build
+# a translation unit: its hardcoded header list named secp256k1_bloom.h, which
+# has never existed. Source scan, so it runs with no Metal device and no Apple
+# toolchain -- which is the point, since the failure showed up only on macOS CI.
+add_executable(test_regression_metal_shader_closure_standalone
+    test_regression_metal_shader_closure.cpp)
+audit_target_defaults(test_regression_metal_shader_closure_standalone)
+target_compile_definitions(test_regression_metal_shader_closure_standalone PRIVATE
+    STANDALONE_TEST
+    UFSECP_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+add_test(NAME regression_metal_shader_closure
+    COMMAND test_regression_metal_shader_closure_standalone)
+set_tests_properties(regression_metal_shader_closure PROPERTIES
+    TIMEOUT 60 LABELS "audit;regression;metal;shaders")
+
 # -- P1-SEC-001: FROST frost_sign absent signer ID (FSI-1..3) — 2026-05-21 --
 if(SECP256K1_BUILD_FROST)
 add_executable(test_exploit_frost_absent_signer_id_standalone
@@ -4387,6 +4404,8 @@ add_executable(unified_audit_runner
     test_regression_ct_blinding_nonce_path.cpp
     # Regression: RFC 6979 HMAC length guards zero out[32] before returning.
     test_regression_hmac_guard_fail_closed.cpp
+    # Regression: the Metal shader include closure is complete and copied.
+    test_regression_metal_shader_closure.cpp
     # SEC-001: CT scalar_inverse zero-branch removal (2026-05-21)
     # Removes data-dependent if(is_zero) branch in non-int128 Fermat fallback.
     test_regression_ct_scalar_inverse_zero.cpp

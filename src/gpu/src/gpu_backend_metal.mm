@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <algorithm>
 #include <vector>
 #include <string>
 #include <fstream>
@@ -209,40 +210,83 @@ static bool sec1_33_to_metal_affine(const uint8_t pub33[33], MetalAffinePoint& o
     return true;
 }
 
-/** Concatenate Metal shader sources into a single string for runtime
- *  compilation.  Tries a list of candidate directories. */
+/** Build a single translation unit for newLibraryWithSource() by expanding the
+ *  kernel entry file's own `#include "..."` directives, recursively, against a
+ *  candidate shader directory.
+ *
+ *  This used to be a hardcoded four-header concatenation:
+ *      secp256k1_field.h, secp256k1_point.h, secp256k1_bloom.h, secp256k1_extended.h
+ *  followed by secp256k1_kernels.metal. Two things were wrong with it, and the
+ *  net effect was that the runtime-source fallback could never succeed:
+ *
+ *    1. `secp256k1_bloom.h` does not exist -- not in src/metal/shaders, not
+ *       anywhere in the tree. Any missing header made metal_load_file() return
+ *       "" and the whole directory was skipped, so the function returned {} for
+ *       every candidate, always.
+ *    2. Even with that removed, the list named 4 of the 11 headers
+ *       secp256k1_kernels.metal includes, and said nothing about the nested
+ *       includes (point -> field, extended -> point, zk -> extended). A
+ *       concatenation cannot leave those `#include "..."` lines in place:
+ *       newLibraryWithSource has no include path, so each one is a hard error.
+ *
+ *  Expanding from the entry file removes the list that could drift: whatever
+ *  the kernel includes is what gets compiled, in the kernel's own order.
+ *  `#include <...>` (metal_stdlib) is left for the Metal compiler. Each quoted
+ *  header is expanded at most once, matching the `#pragma once` the headers
+ *  already carry.
+ */
+static bool metal_expand_includes(const std::string& dir,
+                                  const std::string& file,
+                                  std::vector<std::string>& seen,
+                                  std::string& out,
+                                  int depth) {
+    if (depth > 16) return false;                 // cycle guard
+    std::string const src = metal_load_file(dir + "/" + file);
+    if (src.empty()) return false;
+
+    std::size_t pos = 0;
+    while (pos < src.size()) {
+        std::size_t const eol = src.find('\n', pos);
+        std::size_t const len = (eol == std::string::npos ? src.size() : eol + 1) - pos;
+        std::string const line = src.substr(pos, len);
+        pos += len;
+
+        // Only quoted includes are ours; <metal_stdlib> stays for the compiler.
+        std::size_t const h = line.find_first_not_of(" \t");
+        bool quoted_include = false;
+        std::string name;
+        if (h != std::string::npos && line[h] == '#') {
+            std::size_t k = line.find("include", h);
+            if (k != std::string::npos) {
+                std::size_t const q1 = line.find('"', k);
+                std::size_t const q2 = (q1 == std::string::npos)
+                                           ? std::string::npos : line.find('"', q1 + 1);
+                if (q1 != std::string::npos && q2 != std::string::npos) {
+                    quoted_include = true;
+                    name = line.substr(q1 + 1, q2 - q1 - 1);
+                }
+            }
+        }
+
+        if (!quoted_include) { out += line; continue; }
+
+        if (std::find(seen.begin(), seen.end(), name) != seen.end()) continue;
+        seen.push_back(name);
+        if (!metal_expand_includes(dir, name, seen, out, depth + 1)) return false;
+        out += "\n";
+    }
+    return true;
+}
+
+/** Try each candidate directory until one yields a complete translation unit. */
 static std::string metal_load_combined_source(const std::vector<std::string>& shader_dirs) {
-    static const char* kHeaders[] = {
-        "secp256k1_field.h",
-        "secp256k1_point.h",
-        "secp256k1_bloom.h",
-        "secp256k1_extended.h",
-        nullptr
-    };
-    static const char* kKernels[] = {
-        "secp256k1_kernels.metal",
-        nullptr
-    };
+    static const char* const kEntry = "secp256k1_kernels.metal";
 
     for (const auto& dir : shader_dirs) {
         std::string combined;
-        bool ok = true;
-
-        for (int i = 0; kHeaders[i]; i++) {
-            std::string src = metal_load_file(dir + "/" + kHeaders[i]);
-            if (src.empty()) { ok = false; break; }
-            combined += src; combined += "\n";
-        }
-        if (!ok) continue;
-
-        for (int i = 0; kKernels[i]; i++) {
-            std::string src = metal_load_file(dir + "/" + kKernels[i]);
-            if (src.empty()) { ok = false; break; }
-            combined += src; combined += "\n";
-        }
-        if (!ok) continue;
-
-        return combined;
+        std::vector<std::string> seen;
+        if (metal_expand_includes(dir, kEntry, seen, combined, 0) && !combined.empty())
+            return combined;
     }
     return {};
 }
@@ -2993,6 +3037,11 @@ private:
 
         /* Fallback: compile shader source at runtime */
         std::vector<std::string> shader_dirs;
+#ifdef UFSECP_METAL_SHADER_SRC_DIR
+        // The source tree's own shaders/, by absolute path. Always present and
+        // always complete in a from-source build, unlike the build-tree copies.
+        shader_dirs.emplace_back(UFSECP_METAL_SHADER_SRC_DIR);
+#endif
 #ifdef UFSECP_METAL_METALLIB_DIR
         // Same reasoning as the metallib candidate above: the build tree's
         // shader copies live in <build>/src/metal/shaders, which no CWD-relative

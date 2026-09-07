@@ -1,5 +1,54 @@
 # Audit Changelog
 
+## 2026-09-07 — the Metal runtime-shader fallback has never been able to run
+
+`CI / macos (Release)` still failed `gpu_abi_gate`, `gpu_collect_verify_parity`
+and `unified_audit` after the metallib path fix, with
+
+    [Metal] ERROR: Failed to load metallib: library not found
+
+`ensure_library()` has a second way to get a Metal library: compile the shader
+sources at runtime with `newLibraryWithSource()`. Reading it turned up a defect
+that predates this whole investigation.
+
+`metal_load_combined_source()` concatenated a hardcoded list:
+
+    secp256k1_field.h, secp256k1_point.h, secp256k1_bloom.h, secp256k1_extended.h
+
+**`secp256k1_bloom.h` does not exist.** Not in `src/metal/shaders`, not anywhere
+in the tree. A missing header made `metal_load_file()` return `""`, which failed
+the whole candidate directory, so the function returned `{}` for every directory
+on every call — the fallback was dead code for as long as that list existed.
+
+Two further problems sat behind it. The list named 4 of the 11 headers
+`secp256k1_kernels.metal` actually includes, and it ignored the nested includes
+(`point -> field`, `extended -> point`, `zk -> extended`): a concatenation
+cannot leave `#include "..."` lines in place, because `newLibraryWithSource` has
+no include path. And `src/metal/CMakeLists.txt`'s `SHADER_FILES` copied the same
+four headers, so a copied `shaders/` directory was incomplete regardless.
+
+The loader now expands the entry file's own includes recursively, once each,
+leaving `<metal_stdlib>` for the Metal compiler — so there is no list in C++
+that can drift from the kernel. `SHADER_FILES` was extended to the full
+11-header closure, and `UFSECP_METAL_SHADER_SRC_DIR` bakes in the absolute
+source-tree `shaders/` path so the fallback resolves from any working directory.
+
+Simulated over the real shader tree: 315,076 bytes, 11 headers, 63 `kernel void`
+entry points, and no remaining quoted include.
+
+New module `regression_metal_shader_closure` (`memory_safety`, blocking, MSC-1..4)
+pins it. Source scan, so it runs with no Metal device and no Apple toolchain —
+which is the point, since the defect only ever showed on macOS CI. Proof it
+blocks, three mutations:
+
+| mutation | result |
+|---|---|
+| kernel includes a header that does not exist (the original bug) | 22/22 → 21/23, MSC-1 + MSC-2 |
+| `SHADER_FILES` drops `secp256k1_ct_sign.h` | 22/22 → 21/22, MSC-2 |
+| loader reverts to a hardcoded `kHeaders[]` naming the missing file | 22/22 → 20/22, MSC-3 ×2 |
+
+22/22 from the repo root and from `/tmp`.
+
 ## 2026-09-07 — Three unified_audit modules failed on Windows for reasons that were not about the code
 
 `CI / windows (Release)` reported `unified_audit` at 412/466 with 5 blocking

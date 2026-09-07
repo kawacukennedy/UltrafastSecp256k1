@@ -277,11 +277,23 @@ endif()
 # Copy shader source files (for runtime compilation fallback)
 # -------------------------------------------------------------
 
+# The COMPLETE #include closure of secp256k1_kernels.metal, not a subset.
+# gpu_backend_metal.mm's runtime-compile fallback expands the entry file's own
+# includes, so a copied shaders/ directory missing even one of them yields no
+# translation unit at all -- which is what the old four-header list did.
+# regression_metal_shader_closure pins this list against the actual includes.
 set(SHADER_FILES
     ${SHADER_DIR}/secp256k1_field.h
     ${SHADER_DIR}/secp256k1_point.h
     ${SHADER_DIR}/secp256k1_extended.h
     ${SHADER_DIR}/secp256k1_hash160.h
+    ${SHADER_DIR}/secp256k1_zk.h
+    ${SHADER_DIR}/secp256k1_bip324.h
+    ${SHADER_DIR}/secp256k1_ct_ops.h
+    ${SHADER_DIR}/secp256k1_ct_field.h
+    ${SHADER_DIR}/secp256k1_ct_scalar.h
+    ${SHADER_DIR}/secp256k1_ct_point.h
+    ${SHADER_DIR}/secp256k1_ct_sign.h
     ${SHADER_DIR}/secp256k1_kernels.metal
 )
 

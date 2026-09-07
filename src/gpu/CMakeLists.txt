@@ -71,6 +71,11 @@ if(SECP256K1_BUILD_METAL AND TARGET secp256k1_metal_lib)
     if(SECP256K1_BUILD_TESTS)
         list(APPEND GPU_BACKEND_DEFS
              "UFSECP_METAL_METALLIB_DIR=\"${CMAKE_BINARY_DIR}/src/metal\"")
+        # The shader SOURCES, in the source tree. The runtime-compile fallback
+        # needs them when the prebuilt metallib cannot be loaded, and unlike the
+        # build-tree copies this directory always exists and is always complete.
+        list(APPEND GPU_BACKEND_DEFS
+             "UFSECP_METAL_SHADER_SRC_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../metal/shaders\"")
     endif()
     message(STATUS "  GPU API: Metal backend enabled")
 endif()

@@ -25,6 +25,7 @@ import platform
 import py_compile
 import re
 import subprocess
+import time
 import sys
 import tempfile
 from pathlib import Path
@@ -1586,6 +1587,16 @@ def check_audit_sla_untracked_artifact_uses_mtime() -> None:
     So this pins the behaviour rather than the tracking state: an untracked file
     is aged by mtime even when git has history for its path, and a tracked file
     is still aged by its commit date even when its mtime is now.
+
+    Both halves run against a hermetic throwaway git repository rather than
+    against this checkout. The repo's own state cannot supply the interesting
+    case everywhere: CI clones shallow (fetch-depth 1), so out/reports/ has no
+    git history there at all and docs/AUDIT_SLA.json's only commit is dated
+    today. Asserting against those made the check fail on CI while passing
+    locally -- for reasons that had nothing to do with the resolver. The
+    throwaway repo gives both halves the same 90-day separation between the
+    commit date and the mtime in every checkout, so a wrong ageing source is
+    always 90 days away from a right one and can never be mistaken for it.
     """
     tag = "B3:audit_sla_untracked_uses_mtime"
     path = SCRIPT_DIR / "audit_sla_check.py"
@@ -1601,50 +1612,100 @@ def check_audit_sla_untracked_artifact_uses_mtime() -> None:
         return
 
     failures = []
+    saved_lib_root = getattr(mod, "LIB_ROOT", None)
+    if saved_lib_root is None:
+        fail(tag, "audit_sla_check.LIB_ROOT is gone -- this check drives the "
+                  "resolver by pointing it at a throwaway repo through it")
+        return
 
-    # (1) Untracked, but git HAS history for the path: must use mtime.
-    rel = Path("out/reports/risk_surface_report.json")
-    full = LIB_ROOT / rel
-    tracked = subprocess.run(
-        ["git", "ls-files", "--error-unmatch", "--", str(rel)],
-        cwd=str(LIB_ROOT), capture_output=True, text=True).returncode == 0
-    history = subprocess.run(
-        ["git", "log", "-1", "--format=%ct", "--", str(rel)],
-        cwd=str(LIB_ROOT), capture_output=True, text=True).stdout.strip()
-    if not tracked and history and full.exists():
-        os.utime(full, None)
-        age = mod._file_age_days(full)
-        if age is None or age > 1.0:
-            failures.append(
-                f"untracked {rel} with git history reported {age} days old "
-                "(mtime is now) -- the git-log path is being taken for an "
-                "untracked file")
-    elif not full.exists():
-        # Nothing to assert against; say so rather than pass vacuously.
-        failures.append(f"{rel} absent -- generate it before running this check")
+    from datetime import datetime, timezone
 
-    # (2) Tracked file: must still use the commit date, not mtime. The mtime is
-    # restored afterwards -- preflight --freshness compares source mtimes against
-    # the project-graph build time, so a self-test that leaves a touched mtime
-    # behind reports the repo as stale and fails a different gate.
-    tracked_rel = LIB_ROOT / "docs" / "AUDIT_SLA.json"
-    if tracked_rel.exists():
-        st = tracked_rel.stat()
+    old_stamp = time.time() - 90 * 86400.0
+    old_iso = datetime.fromtimestamp(old_stamp, tz=timezone.utc).isoformat()
+
+    with tempfile.TemporaryDirectory(prefix="ufsecp_sla_age_") as tmp:
+        repo = Path(tmp)
+
+        def git(*args, **env_extra):
+            env = dict(os.environ)
+            env.update(env_extra)
+            return subprocess.run(
+                ["git", *args], cwd=str(repo), capture_output=True, text=True, env=env)
+
+        dated = {
+            "GIT_AUTHOR_DATE": old_iso,
+            "GIT_COMMITTER_DATE": old_iso,
+            "GIT_AUTHOR_NAME": "sla-selftest",
+            "GIT_AUTHOR_EMAIL": "sla@selftest.invalid",
+            "GIT_COMMITTER_NAME": "sla-selftest",
+            "GIT_COMMITTER_EMAIL": "sla@selftest.invalid",
+        }
+
+        setup = [
+            git("init", "-q", "-b", "main"),
+            git("config", "user.email", "sla@selftest.invalid"),
+            git("config", "user.name", "sla-selftest"),
+        ]
+        # An artifact that git HAS history for but no longer tracks -- the exact
+        # shape that made the real bug invisible.
+        (repo / "artifact.json").write_text("{}\n", encoding="utf-8")
+        # A file that stays tracked, for the other half.
+        (repo / "tracked.json").write_text("{}\n", encoding="utf-8")
+        setup += [
+            git("add", "artifact.json", "tracked.json"),
+            git("commit", "-q", "-m", "add both", **dated),
+            git("rm", "-q", "--cached", "artifact.json"),
+            git("commit", "-q", "-m", "untrack the artifact", **dated),
+        ]
+        broken = [c for c in setup if c.returncode != 0]
+        if broken:
+            fail(tag, "could not build the throwaway repo: "
+                      + "; ".join((c.stderr or c.stdout).strip() for c in broken)[:400])
+            return
+
+        artifact = repo / "artifact.json"
+        tracked = repo / "tracked.json"
+        # Untracked artifact: mtime is NOW, its (removal) commit is 90 days old.
+        os.utime(artifact, None)
+        # Tracked file: mtime is 90 days old, its commit is 90 days old too --
+        # so make them differ by planting the mtime at NOW instead, and expect
+        # the 90-day commit date to win.
+        os.utime(tracked, None)
+
         try:
-            os.utime(tracked_rel, None)
-            age = mod._file_age_days(tracked_rel)
-            if age is not None and age < 1.0:
+            mod.LIB_ROOT = repo
+
+            history = subprocess.run(
+                ["git", "log", "-1", "--format=%ct", "--", "artifact.json"],
+                cwd=str(repo), capture_output=True, text=True).stdout.strip()
+            still_tracked = subprocess.run(
+                ["git", "ls-files", "--error-unmatch", "--", "artifact.json"],
+                cwd=str(repo), capture_output=True, text=True).returncode == 0
+            if still_tracked or not history:
                 failures.append(
-                    "tracked docs/AUDIT_SLA.json reported <1 day old after touching "
-                    "its mtime -- commit-date ageing was lost")
+                    "throwaway repo did not produce an untracked-with-history "
+                    f"path (tracked={still_tracked}, history={history!r})")
+            else:
+                age = mod._file_age_days(artifact)
+                if age is None or age > 1.0:
+                    failures.append(
+                        f"untracked artifact.json with a 90-day-old removal commit "
+                        f"reported {age} days old, mtime is now -- the git-log path "
+                        "is being taken for an untracked file")
+
+            tracked_age = mod._file_age_days(tracked)
+            if tracked_age is None or abs(tracked_age - 90.0) > (1.0 / 24.0):
+                failures.append(
+                    f"tracked tracked.json reported {tracked_age} days old with its "
+                    "mtime set to now and its commit 90 days old -- commit-date "
+                    "ageing was lost")
         finally:
-            os.utime(tracked_rel, (st.st_atime, st.st_mtime))
+            mod.LIB_ROOT = saved_lib_root
 
     if failures:
         fail(tag, "; ".join(failures))
     else:
         ok(tag, "untracked artifacts age by mtime; tracked ones by commit date")
-
 
 def check_external_audit_bundle_negative_fixtures() -> None:
     """B4/B5: verify_external_audit_bundle.py must fail closed on a tampered

@@ -202,8 +202,10 @@ using namespace fe52_constants;
 // --target=aarch64-linux-gnu -mcpu=apple-m1 -O3 produces byte-identical
 // assembly with the clause and with plain noinline, while aarch64 gcc-13 at
 // -O0 keeps the kernel at 494 asm lines instead of the 3029 the force-inline
-// path produces. The guards below therefore give clang plain noinline and keep
-// the optimize clause for GCC, which is a codegen no-op on both.
+// path produces. No fe52 kernel carries that clause any more -- the rule now
+// applies only to the fe26 kernels in src/cpu/src/field_26.cpp, which are still
+// out of line and therefore give clang plain noinline and keep the optimize
+// clause for GCC, a codegen no-op on both.
 // Instruction mix, disassembled from a -O3 -march=native GCC 14.2 build
 // (experiments/representation_search). 228 instructions:
 //     31  multiplies        13.6%
@@ -242,8 +244,7 @@ using namespace fe52_constants;
 // unchanged to 0.00% in both libraries -- it is that removing the call boundary
 // lets the caller schedule the 64x64->128 arithmetic alongside its own work.
 //
-// COST: libfastsecp256k1.a grows 14.84% on x86-64 and 22.4% on arm64. The size
-// is the price; see the measured table below for what it buys.
+// The size cost is real and is stated with the ARM64 table below.
 //
 // There is no longer a macro to set. It used to be settable per build, which
 // was also an ODR hazard: FieldElement52::operator* and friends are
@@ -270,7 +271,14 @@ using namespace fe52_constants;
 // Non-overlapping ranges on the first four. Smaller than the x86-64 result (90
 // of 104 ops above 2%) but the same direction, so there is no target left where
 // the flag was measured to be worth keeping off, and the two-configuration ODR
-// hazard the note below describes goes away with it.
+// hazard described above goes away with it.
+//
+// Independently confirmed on Apple silicon by the reporter of issue #336
+// (craigraw), M5 Max / Apple clang 21, BIP-352 scan over 10,356,829 rows,
+// 18 callers, non-LTO: 14.04-14.52s off -> 12.40-12.83s on, against a
+// re-measured v3.68.0 baseline of 12.3-12.7s. The kernels left the leaf table
+// exactly as the x86-64 result predicted, and the consumer-side size cost was
+// +1.2% on their linked extension.
 //
 // COST: libfastsecp256k1.a grows 14.84% on x86-64 and 22.4% on arm64
 // (18.77 MB -> 22.98 MB, measured on the same NDK build). That is the trade.
@@ -1495,8 +1503,8 @@ void fe52_mul_inner_var(std::uint64_t* SECP256K1_RESTRICT r,
 // Uses a[i]*a[j] == a[j]*a[i] symmetry to halve cross-product count.
 // Cross-products computed once and doubled via (a[i]*2) trick.
 
-// Same noinline + optimize("O2") guard as fe52_mul_inner (see above), including
-// the finding that O3 emits byte-identical code. Disassembled at
+// always_inline, same as fe52_mul_inner and for the same measured reason (see
+// the "Field-kernel inlining policy" block above). Disassembled at
 // -O3 -march=native: 164 instructions, 21 multiplies (12.8%), 70 mov/push/pop
 // (42.7%) -- the same data-movement-dominated shape.
 SECP256K1_FE52_FORCE_INLINE

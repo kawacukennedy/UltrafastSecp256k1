@@ -224,6 +224,7 @@ int test_exploit_safegcd_divsteps_run();              // Bernstein-Yang SafeGCD 
 int test_exploit_ecdsa_pmn_wraparound_run();          // ECDSA PMN wraparound: r ∈ [n,p) constant + logic (2026-05-05)
 int test_exploit_custom_nonce_injection_run();        // RFC 6979 nonce edge cases (null/zero/n/n-1)
 int test_regression_ct_blinding_nonce_path_run();    // CT nonce path uses generator_mul_blinded (2026-05-12)
+int test_regression_hmac_guard_fail_closed_run();    // RFC 6979 HMAC length guards zero out[32] before returning
 int test_regression_ct_scalar_inverse_zero_run();   // SEC-001: CT scalar_inverse zero-branch removal (2026-05-21)
 int test_regression_ct_ops_run();                   // SEC-002/007/008/010, CT-004/005: CT ops regressions (consolidated 2026-06-09 — was split across two byte-identical files)
 int test_regression_bip324_privkey_lifetime_run();  // SEC-006: Bip324Session privkey_ lifetime documentation (2026-05-21)
@@ -881,6 +882,7 @@ static const AuditModule ALL_MODULES[] = {
     { "ct_verif_formal",   "Formal CT verification (ctgrind/MSAN)",       "ct_analysis",    test_ct_verif_formal_run, true },
     { "diag_scalar_mul",   "CT scalar_mul vs fast (diagnostic)",           "ct_analysis",    diag_scalar_mul_run, false },
     { "ct_blinding_nonce", "CT nonce path uses generator_mul_blinded",      "ct_analysis",    test_regression_ct_blinding_nonce_path_run, false },
+    { "hmac_guard_fail_closed", "RFC 6979 HMAC length guards zero out[32] instead of returning it untouched", "ct_analysis", test_regression_hmac_guard_fail_closed_run, false },
 
     // ===================================================================
     // Section 3: Differential & Cross-Library Testing

@@ -1,5 +1,39 @@
 # Audit Changelog
 
+## 2026-09-07 — RFC 6979 HMAC length guards get the test their fix shipped without
+
+`d2544fc8` made `HMAC_Ctx::compute_short`, `::compute_two_block` and
+`::compute_three_block` in `src/cpu/src/ecdsa.cpp` zero their 32-byte output
+before returning on a length-precondition violation. Before it, the guards
+returned with `out[32]` never written, so a caller that hit one read back
+whatever was on its stack and could not distinguish it from a real HMAC.
+
+That commit contains no test — `ci/check_security_fix_has_test.py --since d2544fc8~1`
+names it by hash, against this repository's own absolute same-commit-test rule.
+New module `regression_hmac_guard_fail_closed` (`ct_analysis`, blocking) is the
+missing one: 13 checks pinning that each of the three guards still carries its
+size_t-wrap condition AND zeroes `out` in the same statement it returns from,
+plus that `init_zero_key32`'s process-lifetime midstate is computed by
+`init_key32(ZERO_KEY32)` rather than transcribed from a table.
+
+It is a source scan, deliberately. `HMAC_Ctx` is in an anonymous namespace with
+no header, no external linkage and no ABI entry point, and every production
+caller passes a compile-time-fixed length — so the guarded branch is
+unreachable from any test translation unit by construction. That is also why
+this is a latent hazard rather than a live bug. Proof it blocks: four mutations
+of `ecdsa.cpp` (each guard reverted to a bare `return;`, and the midstate
+transcribed with `memcpy` instead of computed) are each caught, 13/13 → 12/13,
+11/13, 11/13, 12/13. CWD-independent via `UFSECP_SOURCE_ROOT`: 13/13 both from
+the repo root and from `/tmp`.
+
+The narrower half of the story is recorded in `docs/SECRET_LIFECYCLE.md`: the
+in-file rationale claims a zeroed output is rejected downstream by
+`parse_bytes_strict_nonzero`, which holds only at the six `compute_short(V, 32, V)`
+candidate sites. Every `compute_two_block`/`compute_three_block` call writes the
+DRBG key `K`, where a zeroed output is never parsed. The property the module
+pins is the one that holds everywhere: a deterministic zero instead of stack
+residue.
+
 ## 2026-09-07 — CAAS residual evidence refreshed, and one artifact that could never be refreshed
 
 `Preflight` and `Gate / PR-Push / Block 3` were failing on

@@ -3593,6 +3593,28 @@ add_test(NAME regression_ct_blinding_nonce_path
 set_tests_properties(regression_ct_blinding_nonce_path PROPERTIES
     TIMEOUT 60 LABELS "audit;regression;ct;signing;blinding;dpa")
 
+# -- RFC 6979 HMAC length guards must fail closed -----------------------------
+# d2544fc8 made compute_short / compute_two_block / compute_three_block zero
+# out[32] before returning on a length-precondition violation, instead of
+# returning with the caller's buffer untouched. That commit shipped with no
+# test (ci/check_security_fix_has_test.py names it); this is the missing one.
+# Source scan, because HMAC_Ctx is in an anonymous namespace in ecdsa.cpp and
+# no test TU can construct one -- see the file header for why that is the
+# strongest guard available here.
+add_executable(test_regression_hmac_guard_fail_closed_standalone
+    test_regression_hmac_guard_fail_closed.cpp)
+audit_target_defaults(test_regression_hmac_guard_fail_closed_standalone)
+target_compile_definitions(test_regression_hmac_guard_fail_closed_standalone PRIVATE
+    STANDALONE_TEST
+    # audit_read_source_file() resolves via this absolute compile-time root, so
+    # the scan works from any CWD -- ctest runs this from <build>/audit, and
+    # ci/check_audit_cwd_independence.py runs the same binary from /tmp.
+    UFSECP_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+add_test(NAME regression_hmac_guard_fail_closed
+    COMMAND test_regression_hmac_guard_fail_closed_standalone)
+set_tests_properties(regression_hmac_guard_fail_closed PROPERTIES
+    TIMEOUT 60 LABELS "audit;regression;rfc6979;hmac;fail-closed")
+
 # -- P1-SEC-001: FROST frost_sign absent signer ID (FSI-1..3) — 2026-05-21 --
 if(SECP256K1_BUILD_FROST)
 add_executable(test_exploit_frost_absent_signer_id_standalone
@@ -4363,6 +4385,8 @@ add_executable(unified_audit_runner
     # Regression: CT nonce path uses generator_mul_blinded (2026-05-12)
     # Guards that ct::ecdsa_sign / ct::schnorr_sign activate DPA blinding.
     test_regression_ct_blinding_nonce_path.cpp
+    # Regression: RFC 6979 HMAC length guards zero out[32] before returning.
+    test_regression_hmac_guard_fail_closed.cpp
     # SEC-001: CT scalar_inverse zero-branch removal (2026-05-21)
     # Removes data-dependent if(is_zero) branch in non-int128 Fermat fallback.
     test_regression_ct_scalar_inverse_zero.cpp

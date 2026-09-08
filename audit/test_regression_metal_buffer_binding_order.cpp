@@ -71,7 +71,26 @@ const char* const kShaderFiles[] = {
     "src/metal/shaders/secp256k1_bp_gen_table.h",
 };
 
-constexpr const char* kHostFile = "src/gpu/src/gpu_backend_metal.mm";
+// Every host that binds buffers to these kernels, with the pair of names it
+// uses to do so.
+//
+// This started as a single file. `src/metal/src/metal_audit_runner.mm` was left
+// out because it is "only" the diagnostic tool -- and it was the file that had
+// the bug: mtl_schnorr_sign bound buffers 0..3 to a kernel that declares five,
+// leaving `results [[buffer(4)]]` unbound, so every Schnorr module in the Metal
+// audit failed on macOS CI while the signing path itself was fine. A checker
+// that covers one caller of a shared shader is a checker that reports clean
+// while a sibling is broken.
+struct HostFile {
+    const char* path;
+    const char* get_pipeline;   // ...("KERNEL_NAME")
+    const char* dispatch;       // ...(..., {a, b, c})
+};
+
+const HostFile kHostFiles[] = {
+    { "src/gpu/src/gpu_backend_metal.mm",     "make_pipeline(\"", "dispatch_sync_checked" },
+    { "src/metal/src/metal_audit_runner.mm",  "get_pipeline(\"",  "dispatch_sync"         },
+};
 
 bool is_ident_char(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -151,16 +170,21 @@ std::vector<Kernel> parse_kernels(const std::string& src) {
 }
 
 struct Site {
+    std::string host;
     std::string kernel;
     std::vector<std::string> buffers;
 };
 
-// Parse `make_pipeline("NAME")` followed by the next
-// `dispatch_sync_checked(..., {a, b, c})` before any further make_pipeline.
-std::vector<Site> parse_dispatch_sites(const std::string& src) {
+// Parse `<getter>("NAME")` followed by the next `<dispatch>(..., {a, b, c})`
+// before any further pipeline lookup. The two hosts spell both names
+// differently (make_pipeline/dispatch_sync_checked vs
+// get_pipeline/dispatch_sync), so they are parameters, not literals.
+std::vector<Site> parse_dispatch_sites(const std::string& src,
+                                       const std::string& getter,
+                                       const std::string& dispatch) {
     std::vector<Site> out;
-    std::string const mp = "make_pipeline(\"";
-    std::string const ds = "dispatch_sync_checked";
+    std::string const mp = getter;
+    std::string const ds = dispatch;
     std::size_t pos = 0;
     while ((pos = src.find(mp, pos)) != std::string::npos) {
         std::size_t const nb = pos + mp.size();
@@ -169,12 +193,41 @@ std::vector<Site> parse_dispatch_sites(const std::string& src) {
         std::string const kernel = src.substr(nb, ne - nb);
 
         std::size_t const next_mp = src.find(mp, ne);
-        std::size_t const call = src.find(ds, ne);
         pos = ne;
-        // No dispatch before the next pipeline is created -- this pipeline is
-        // used some other way; nothing to check.
-        if (call == std::string::npos) continue;
-        if (next_mp != std::string::npos && call > next_mp) continue;
+
+        // The dispatch must be a CALL, i.e. the next non-space character after
+        // the name is '('. Without this the parser also matched the function
+        // name inside a comment and then swallowed an unrelated brace, turning
+        // a prose mention into a bogus MBB-2 failure.
+        std::size_t call = std::string::npos;
+        for (std::size_t c = src.find(ds, ne); c != std::string::npos;
+             c = src.find(ds, c + 1)) {
+            std::size_t p = c + ds.size();
+            while (p < src.size() && (src[p] == ' ' || src[p] == '\t' ||
+                                      src[p] == '\n' || src[p] == '\r')) ++p;
+            if (p < src.size() && src[p] == '(') { call = c; break; }
+        }
+
+        // No dispatch before the next pipeline is created. Either the pipeline
+        // is used some other way, or this site encodes buffers by hand with
+        // `[enc setBuffer:X offset:0 atIndex:N]` -- mtl_batch_field_inv does,
+        // because the Montgomery trick needs dispatchThreadgroups. Parse that
+        // form too rather than leaving the site uncovered.
+        bool const no_call = (call == std::string::npos) ||
+                             (next_mp != std::string::npos && call > next_mp);
+        if (no_call) {
+            std::size_t const limit = (next_mp == std::string::npos) ? src.size() : next_mp;
+            Site s;
+            s.kernel = kernel;
+            std::string const sb = "setBuffer:";
+            for (std::size_t b = src.find(sb, ne); b != std::string::npos && b < limit;
+                 b = src.find(sb, b + 1)) {
+                std::string const name = ident_at(src, b + sb.size());
+                if (!name.empty()) s.buffers.push_back(name);
+            }
+            if (!s.buffers.empty()) out.push_back(std::move(s));
+            continue;
+        }
 
         std::size_t const brace = src.find('{', call);
         if (brace == std::string::npos) continue;
@@ -216,6 +269,11 @@ std::string normalize(const std::string& in) {
         s += static_cast<char>((c >= 'A' && c <= 'Z') ? (c - 'A' + 'a') : c);
     }
     if (s.rfind("buf_", 0) == 0) s = s.substr(4);
+    // The audit runner spells the same convention the other way round
+    // (`msg_buf`, `key_buf`); strip either affix so one alias table serves both
+    // hosts. Purely a naming convention -- it carries no meaning to compare.
+    if (s.size() > 4 && s.compare(s.size() - 4, 4, "_buf") == 0)
+        s = s.substr(0, s.size() - 4);
     while (!s.empty() && s.back() == '_') s.pop_back();
     return s;
 }
@@ -244,6 +302,9 @@ const Alias kAliases[] = {
     { "pubs",    "pubkeys"     },
     { "pubs",    "pubkeys_x"   },
     { "pk",      "pubkeys"     },
+    { "pk",      "pubkeys_x"   },
+    { "key",     "privkeys"    },
+    { "cnt",     "count"       },
     { "pks",     "pubkeys"     },
     { "pks",     "pubkeys_x"   },
     { "bases",   "pubkeys"     },
@@ -306,18 +367,32 @@ int test_regression_metal_buffer_binding_order_run() {
         shaders += "\n";
     }
 
-    std::string const host = audit_read_source_file(kHostFile);
-    CHECK(!host.empty(), "MBB-0: src/gpu/src/gpu_backend_metal.mm resolves from any CWD");
-    if (shaders.empty() || host.empty()) {
+    std::vector<Site> sites;
+    bool hosts_ok = true;
+    for (auto const& h : kHostFiles) {
+        std::string const src = audit_read_source_file(h.path);
+        std::string const msg = std::string("MBB-0: ") + h.path + " resolves from any CWD";
+        CHECK(!src.empty(), msg);
+        if (src.empty()) { hosts_ok = false; continue; }
+        auto found = parse_dispatch_sites(src, h.get_pipeline, h.dispatch);
+        std::printf("  %-40s %zu dispatch site(s)\n", h.path, found.size());
+        // A host that parses to nothing is a broken parser, not a clean file --
+        // without this the whole file would drop out of the gate silently.
+        std::string const nonempty =
+            std::string("MBB-0: ") + h.path + " parsed to at least one dispatch site";
+        CHECK(!found.empty(), nonempty);
+        for (auto& s : found) { s.host = h.path; sites.push_back(std::move(s)); }
+    }
+
+    if (shaders.empty() || !hosts_ok) {
         std::printf("\n[regression_metal_buffer_binding_order] %d/%d checks passed\n",
                     g_pass, g_pass + g_fail);
         return 1;
     }
 
     std::vector<Kernel> const kernels = parse_kernels(shaders);
-    std::vector<Site>   const sites   = parse_dispatch_sites(host);
 
-    std::printf("  %zu kernel(s) with buffer parameters, %zu dispatch site(s)\n\n",
+    std::printf("\n  %zu kernel(s) with buffer parameters, %zu dispatch site(s) total\n\n",
                 kernels.size(), sites.size());
 
     // A parser that silently found nothing would turn every check below into a
@@ -325,18 +400,19 @@ int test_regression_metal_buffer_binding_order_run() {
     CHECK(kernels.size() >= 20,
           "MBB-0: the shader parser found the kernels (a zero/near-zero count "
           "means the parser broke, not that the code is clean)");
-    CHECK(sites.size() >= 20,
-          "MBB-0: the host parser found the dispatch sites");
+    CHECK(sites.size() >= 40,
+          "MBB-0: the host parsers found the dispatch sites across all hosts");
 
     for (auto const& s : sites) {
         const Kernel* k = find_kernel(kernels, s.kernel);
+        std::string const where = " [" + s.host + "]";
 
         std::string msg = "MBB-1: dispatched kernel '" + s.kernel +
-                          "' exists in the shader sources";
+                          "' exists in the shader sources" + where;
         CHECK(k != nullptr, msg);
         if (!k) continue;
 
-        msg = "MBB-2: '" + s.kernel + "' is dispatched with " +
+        msg = where + " MBB-2: '" + s.kernel + "' is dispatched with " +
               std::to_string(k->params.size()) + " buffer(s), matching its "
               "[[buffer(N)]] parameter count";
         bool const arity_ok = (s.buffers.size() == k->params.size());
@@ -351,8 +427,9 @@ int test_regression_metal_buffer_binding_order_run() {
         }
 
         for (std::size_t i = 0; i < k->params.size(); ++i) {
-            msg = "MBB-3: " + s.kernel + " buffer(" + std::to_string(i) + ") -- host '" +
-                  s.buffers[i] + "' is the kernel's '" + k->params[i] + "'";
+            msg = where + " MBB-3: " + s.kernel + " buffer(" + std::to_string(i) +
+                  ") -- host '" + s.buffers[i] + "' is the kernel's '" +
+                  k->params[i] + "'";
             CHECK(corresponds(s.buffers[i], k->params[i]), msg);
         }
     }

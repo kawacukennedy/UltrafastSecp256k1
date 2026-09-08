@@ -1,5 +1,82 @@
 # Audit Changelog
 
+## 2026-09-08 - Metal audit: Schnorr signing failed on an unbound kernel argument
+
+The advisory Metal audit on the macOS runner reported `ISSUES-FOUND` with all
+nine signature-related modules failing and all twelve math modules passing:
+
+```
+[13/27] ECDSA sign + verify roundtrip                FAIL  (17140 ms) [error=1]
+[14/27] Schnorr/BIP-340 sign + verify roundtrip      FAIL  (12524 ms) [error=1]
+[15/27] ECDSA verify rejects wrong pubkey            FAIL  (1 ms)     [error=1]
+[19/27] RFC-6979 ECDSA deterministic nonce           FAIL  (0 ms)     [error=1]
+[20/27] BIP-340 Schnorr known-key roundtrip          FAIL  (0 ms)     [error=1]
+[21/27] ECDSA multi-key (10 keys) sign+verify        FAIL  (0 ms)     [error=10]
+[22/27] Schnorr multi-key (10 keys) sign+verify      FAIL  (0 ms)     [error=10]
+[26/27] ECDSA 50-iteration stress                    FAIL  (9 ms)     [error=10]
+[27/27] Schnorr 25-iteration stress                  FAIL  (8 ms)     [error=10]
+```
+
+The error codes are the modules' own return values, and every one of them is the
+code for "the sign call returned false" -- including module 15, whose code for
+"verify accepted a signature made under the wrong key" is 3. So no verify ever
+wrongly accepted anything; the audit never reached a verify at all.
+
+**`mtl_schnorr_sign` bound four buffers to a kernel that declares five.**
+`schnorr_sign_batch` takes `device bool *results [[buffer(4)]]` -- it has since
+GPU-GUARDRAIL-9-SCHNORR added it to match `ecdsa_sign_batch` -- and writes
+`results[tid] = ok`. The audit runner never bound argument 4, so the kernel's
+first store went to an unbound argument. This is in the diagnostic tool only:
+the shipped host backend `src/gpu/src/gpu_backend_metal.mm` binds all 32 of its
+dispatch sites correctly, and no signing path in the library is affected.
+
+Three further defects in the same file, all of which made the first one harder
+to see than it should have been:
+
+- `MetalCtx::dispatch_sync` returned `void` and ignored `cmd.error`. A faulted
+  command buffer and a kernel that ran and answered "no" both left the output
+  buffer at its initial value, so both surfaced as a bare `[error=1]` with no
+  cause. It now returns `bool`, reports the driver's message, names a nil
+  argument before the driver faults on it, and every one of the 12 call sites
+  checks it.
+- `mtl_batch_field_inv` encodes its own command buffer (the Montgomery trick
+  needs `dispatchThreadgroups`) and returned `true` unconditionally. Its one
+  caller happened to catch a failed dispatch through the `a * a^-1 == 1` check,
+  but any future caller reading the buffer directly would have reported PASS on
+  a dispatch that never ran. It now checks `cmd.error`.
+- `audit_batch_j2a` was `return audit_batch_inversion();` -- the same test under
+  two names, so Section 3 reported 2/2 PASS on one distinct check. It is now a
+  real batch-vs-single-element inverse comparison on its own fixture, which is
+  the property Jacobian-to-affine conversion actually depends on.
+
+**`regression_metal_buffer_binding_order` extended to cover the second host.**
+MBB already asserted the arity rule that this bug breaks -- it just never read
+this file. `kHostFile` becomes `kHostFiles`, with the pipeline-lookup and
+dispatch spellings as per-host parameters (`make_pipeline`/`dispatch_sync_checked`
+vs `get_pipeline`/`dispatch_sync`), and the site parser gained two things the
+new file needs: it now requires the dispatch name to be followed by `(` so a
+prose mention in a comment cannot be mistaken for a call, and it parses
+hand-encoded `[enc setBuffer:X offset:0 atIndex:N]` sites so `batch_inverse` is
+covered rather than skipped. A host file that parses to zero sites now fails
+MBB-0 instead of silently dropping out of the gate.
+
+Coverage went from 32 dispatch sites to 45; the module goes 238/238 -> 318/318.
+Mutation check: restoring the four-buffer bind gives 312/313 with
+
+```
+[FAIL] [src/metal/src/metal_audit_runner.mm] MBB-2: 'schnorr_sign_batch' is
+       dispatched with 5 buffer(s), matching its [[buffer(N)]] parameter count
+     host passes 4: msg_buf key_buf sig_buf cnt_buf
+     kernel wants 5: msg_hashes privkeys signatures count results
+```
+
+It is a source scan, so it runs on every platform with no Metal device.
+
+What this does NOT explain: the three ECDSA modules bound all five buffers
+correctly and still failed. That cause is still unknown -- it needs a Metal
+device, and the runner previously discarded the one piece of evidence that would
+identify it. With `cmd.error` now reported, the next macOS run says why.
+
 ## 2026-09-08 - Valgrind failed intermittently on thread TLS that is alive by design
 
 `Valgrind Memcheck` went red with "Valgrind found memory errors" while the same

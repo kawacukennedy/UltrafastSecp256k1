@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generation with `ufsecp_last_error()` / `ufsecp_last_error_msg()` diagnostics.
   The existing stateless `ufsecp_addr_p2sh` symbol remains available and
   produces byte-identical addresses.
+- Completed the clang `-Wunknown-attributes` cleanup for the field kernels:
+  the two `fe26` inner functions (`fe26_mul_inner` / `fe26_sqr_inner`) still
+  spelled the GCC-only `optimize("O2")` attribute under a `__GNUC__ ||
+  __clang__` guard. They now follow the same policy as the `fe52` kernels
+  (see the "Field-kernel inlining policy" block in `field_52_impl.hpp`):
+  `optimize("O2") + noinline` on GCC, plain `noinline` on clang, which drops
+  the remaining two spurious warnings per translation unit on clang builds.
 
 ### Credited
 

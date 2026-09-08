@@ -426,7 +426,19 @@ if(TARGET secp256k1_gpu_host AND (TARGET ufsecp_shared OR TARGET ufsecp_static))
     )
     target_compile_definitions(test_gpu_abi_gate PRIVATE STANDALONE_TEST)
     add_test(NAME gpu_abi_gate COMMAND test_gpu_abi_gate)
-    set_tests_properties(gpu_abi_gate PROPERTIES TIMEOUT 60)
+    # 60 s was too tight for what this test actually does. It is not a unit
+    # test: it creates and destroys GPU contexts, compiles Metal shaders,
+    # exercises concurrent context creation and pool growth, and runs the
+    # BIP-352 overlap and shader-path cases. On the macOS runner it measured
+    # 53.40 s, then 56.48 s, then 60.04 s -- three consecutive runs walking into
+    # a limit that was never more than a few seconds above its own cost, with no
+    # hang and no failing check. A budget that close to the measured time is a
+    # flake generator, not a guard.
+    #
+    # 300 s still catches a real hang (the whole ctest suite is ~10 min) while
+    # leaving room for a slow shared runner and for a slower backend: the same
+    # binary took over 120 s locally against an OpenCL device.
+    set_tests_properties(gpu_abi_gate PROPERTIES TIMEOUT 300)
 
     # -- GPU libbitcoin column verify differential (GPU columns vs CPU per-row) --
     add_executable(test_gpu_lbtc_columns_diff test_gpu_lbtc_columns_diff.cpp)

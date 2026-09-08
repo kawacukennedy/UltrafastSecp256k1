@@ -1,5 +1,74 @@
 # Audit Changelog
 
+## 2026-09-08 - three CI gates that could fail without anything being wrong
+
+The fixed-base cache change made the suite roughly 20x faster on macOS (the
+`abi` label went from 43.96 to 1.97 sec*proc) and every timeout it had caused
+cleared. What was left were three gates whose failure did not mean a defect.
+None of these is a threshold relaxation; each one removes a way for a green
+build to report red.
+
+**1. `audit_ct.cpp` timing-variance module had no warm-up.**
+
+```
+[FAIL] CT scalar_mul timing ratio 2.219x >= 2.0x
+```
+
+It timed 100 `ct::scalar_mul(G, k=1)` then 100 `ct::scalar_mul(G, k=n-1)` and
+compared the averages, with nothing run beforehand. The first loop therefore
+absorbed every one-time cost in the process, and it started mattering the
+moment the fixed-base table began being LOADED from the cache file instead of
+built in memory: the pages are cold on first touch where a freshly built table
+is already resident. The k=1 leg measured 2.219x the k=n-1 leg on a difference
+that has nothing to do with the scalar.
+
+Both scalars are now warmed 20 times before timing, and the samples are taken
+interleaved A/B/A/B instead of all-A-then-all-B, so runner drift over the
+measurement window is charged to both legs rather than to whichever ran second.
+Initialisation cost is not secret-dependent, so removing it makes the check more
+sensitive to what it exists for. The 2.0x threshold and the CV noise guard are
+untouched. Measured after: `k=1 35896 ns, k=n-1 35919 ns, ratio 1.001, CV 0.02`.
+
+**2. `gpu_abi_gate` had a 60 s budget for ~56 s of work.**
+
+Three consecutive macOS runs: 53.40 s, 56.48 s, 60.04 s (Timeout). No hang, no
+failing check -- the test creates and destroys GPU contexts, compiles Metal
+shaders, exercises concurrent context creation and pool growth. A budget that
+close to the measured cost is a flake generator. Raised to 300 s, which still
+catches a real hang (the whole suite is ~10 min) and leaves room for a slower
+backend: the same binary took over 120 s locally against OpenCL.
+
+**3. `py_nonce_bias` failed a run on one 4-sigma reading.**
+
+Windows reported `LSB (bit 0): 51.990% set, z=3.98, p=6.9e-5` and failed the
+build. The same library measured 50.700% / 49.970% / 50.040% on three
+consecutive local runs -- no systematic bias.
+
+The 254 interior bits already carried a multiple-testing rule (>= 2 bits must
+flag together) with a documented false positive behind it. MSB and LSB had no
+such protection: inputs are freshly random every invocation, so at p < 1e-4 per
+bit, two specially-treated bits and roughly six platforms per push, a false
+failure is not rare enough to ignore.
+
+`ci/nonce_bias_detector.py` now re-draws an independent sample of the same size
+when MSB or LSB alarms and re-tests only that bit, failing only if the alarm
+reproduces. The threshold is unchanged at 4 sigma; a real bias is a property of
+the implementation and reproduces, a fluke does not, which puts the
+false-failure rate at p^2 ~ 5e-9 with full sensitivity retained. Collisions and
+the KS verdict are never re-litigated -- a repeated r-value is catastrophic on
+first sight.
+
+Verified in both directions with injected data (bit 0 forced to 53% set):
+
+```
+fluke: biased first draw, clean confirmation
+    LSB 53.480% z=6.96 -> [confirm] 50.180% p=7.19e-01 -> not reproduced
+    Overall: PASS   exit=0
+real:  biased in both draws
+    LSB 52.790% z=5.58 -> [confirm] 53.020% p=1.54e-09 -> REPRODUCED
+    Overall: FAIL   exit=1
+```
+
 ## 2026-09-07 - fixed-base table: built once, saved, loaded thereafter (per-user cache directory)
 
 The disk cache is on by default again. What changed is WHERE it goes, which is

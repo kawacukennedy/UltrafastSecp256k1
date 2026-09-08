@@ -13,6 +13,34 @@
 > required-tool FAIL or a single PASS + SKIP is **inconclusive, never a pass**.
 > Run: `python3 ci/check_ct_evidence_status.py --json`.
 
+### 2026-09-07 precompute.cpp / CMakeLists.txt — fixed-base cache location and no-op reconfigure (no CT surface moved)
+
+Two changes touch files the secret-path gate classifies as CT secret-bearing
+surfaces. **Neither moves a CT boundary**, and both are recorded here so the
+classification is answered rather than waived.
+
+- **Fixed-base table cached in the per-user cache directory.** The table is
+  precomputed multiples of the generator `G` — public data any observer can
+  derive independently. Nothing secret has ever been written to
+  `cache_w*.bin`, so no advisory is warranted for the earlier revisions that
+  left the file in the caller's working directory; it was a filesystem
+  side-effect defect, not a key-material disclosure. What changed is the
+  location (per-user cache directory, created and kept; never the CWD) and the
+  fact that the table is built once and loaded thereafter.
+- **`configure_fixed_base()` no longer invalidates on a no-op.** Re-applying an
+  identical configuration keeps the built context instead of recomputing it. The
+  comparison is over the whole configuration, so the context and `g_config` can
+  never describe different settings. This changes *when* a public table is
+  rebuilt, not what any constant-time primitive does: `ct::scalar_mul`,
+  `ct::generator_mul_blinded`, `ct::scalar_inverse` and the RFC 6979 nonce path
+  are untouched, and no branch or memory access anywhere became dependent on
+  secret data.
+
+Tests: `regression_fixed_base_cache_lifecycle` (FBC-1..4, location and
+lifetime, both cache modes) and `regression_precompute_noop_reconfigure`
+(PNR-1..4, with a negative control proving a real config change still
+invalidates).
+
 ### 2026-06-01 ct_sign.cpp — variable-length Schnorr CT sign overload (SHIM-001 restore)
 
 - **`src/cpu/src/ct_sign.cpp`**: added a variable-length overload

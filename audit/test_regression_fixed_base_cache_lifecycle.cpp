@@ -29,14 +29,21 @@
 // into the working directory, and a caller who had configured nothing got a
 // 255 MB cache_w18.bin (window_bits=18 by default) dropped wherever it ran.
 //
+// The table is now built ONCE and reused: the default is to save it to the
+// per-user cache directory the platform reserves for this
+// ($XDG_CACHE_HOME/secp256k1 or ~/.cache/secp256k1, ~/Library/Caches/secp256k1,
+// %LOCALAPPDATA%\\secp256k1) and load it thereafter. The location is what was
+// wrong before, not the caching.
+//
 // What this pins:
-//   FBC-1  default build writes NO cache file, in the CWD or anywhere
+//   FBC-1  the default matches how the library was built, and with the cache
+//          OFF nothing is written anywhere
 //   FBC-2  with the cache enabled and a directory named, the file is created
 //          THERE on the first run -- the case the old resolver got wrong
-//   FBC-3  with the cache enabled and no directory named, nothing lands in the
-//          CWD (it goes to the system temp dir instead)
-//   FBC-4  a caller-named cache file survives -- persistence is the reason to
-//          name a directory, so it is not ours to delete
+//   FBC-3  with the cache enabled and NO directory named, nothing lands in the
+//          CWD (it goes to the per-user cache directory instead)
+//   FBC-4  a caller-named cache file survives a reconfigure -- being loadable
+//          by the next process is the whole point, so it is not ours to delete
 //
 // Build-flag coupling: SECP256K1_FIXED_BASE_DISK_CACHE selects the default for
 // use_cache. Both modes are exercised here regardless of how the library was
@@ -126,11 +133,21 @@ int test_regression_fixed_base_cache_lifecycle_run() {
 
         FixedBaseConfig cfg;              // defaults, whatever the build chose
         cfg.window_bits = kWindow;
-        bool const default_is_off = !cfg.use_cache;
-        CHECK(default_is_off,
-              "FBC-1: FixedBaseConfig defaults to use_cache=false -- the fixed-base "
-              "table is built in memory and nothing is written "
-              "(build with -DSECP256K1_FIXED_BASE_DISK_CACHE=ON to opt in)");
+
+        // The default has to agree with the build flag in BOTH directions. A
+        // header that says one thing while the library was compiled expecting
+        // the other is an ODR-shaped mismatch, not a preference.
+#if defined(SECP256K1_FIXED_BASE_DISK_CACHE) && !SECP256K1_FIXED_BASE_DISK_CACHE
+        CHECK(!cfg.use_cache,
+              "FBC-1: built with -DSECP256K1_FIXED_BASE_DISK_CACHE=OFF, so "
+              "FixedBaseConfig defaults to use_cache=false and the table is "
+              "rebuilt in every process with nothing written");
+#else
+        CHECK(cfg.use_cache,
+              "FBC-1: FixedBaseConfig defaults to use_cache=true -- the table is "
+              "built once, saved to the per-user cache directory, and loaded by "
+              "every later process (never the working directory)");
+#endif
 
         cfg.use_cache = false;            // pin the mode under test either way
         build_table(cfg);
@@ -173,7 +190,8 @@ int test_regression_fixed_base_cache_lifecycle_run() {
         bool still_there = !cache_files_in(cachedir).empty();
         CHECK(still_there,
               "FBC-4: a cache file in a caller-named directory survives "
-              "reconfiguration -- it is not ours to delete");
+              "reconfiguration -- the next process loading it instead of "
+              "rebuilding is the whole point, so it is not ours to delete");
     }
 
     // ── FBC-3: cache on, no directory named -> not the CWD ───────────────────
@@ -191,7 +209,7 @@ int test_regression_fixed_base_cache_lifecycle_run() {
         auto const in_cwd = cache_files_in(cwd);
         CHECK(in_cwd.empty(),
               "FBC-3: with the cache on and no cache_dir configured, the file goes "
-              "to the system temp directory, never to the working directory");
+              "to the per-user cache directory, never to the working directory");
         for (auto const& f : in_cwd) std::printf("      unexpected: %s\n", f.string().c_str());
     }
 

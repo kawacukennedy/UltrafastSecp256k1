@@ -22,16 +22,25 @@ into its **current working directory** (`cache_w18.bin`, 255 MB at the default
   values any observer can derive. This is a filesystem side-effect defect, not
   a key-material disclosure, and no advisory is warranted for shipped versions
   on that basis.
-- **What changed:** the default build now writes nothing at all; the table is
-  built in memory. With `-DSECP256K1_FIXED_BASE_DISK_CACHE=ON` (or
-  `FixedBaseConfig::use_cache = true` set explicitly) the file is created in the
-  configured `cache_dir` on the **first** run — the case the old resolver got
-  wrong — and, when no directory is configured, in the system temp directory.
-  It is never placed in the working directory in either mode.
+- **What changed (final state):** the table is built **once** and reused. The
+  default location is the per-user cache directory the platform reserves for
+  this — `$XDG_CACHE_HOME/secp256k1` or `~/.cache/secp256k1`,
+  `~/Library/Caches/secp256k1`, `%LOCALAPPDATA%\secp256k1` — created if missing
+  and kept, so a later process loads it instead of recomputing. **Never the
+  working directory, in any mode.** The system temp directory is only a fallback
+  for when none of those can be determined, and that fallback is the one case
+  removed at exit. `-DSECP256K1_FIXED_BASE_DISK_CACHE=OFF` opts out entirely
+  (nothing written, table rebuilt per process); the macro is defined as 0 or 1
+  either way so the header default cannot disagree with the compiled library.
 - **Ownership:** a cache file in a caller-named directory is the caller's and is
-  not deleted by the library; persistence across processes is the only reason to
-  name a directory. Files the library itself placed in the temp directory are
-  removed at exit.
+  never deleted by the library. `set_cache_directory()` / `SECP256K1_CACHE_DIR`
+  create the directory on the first save rather than requiring it to exist.
+- **Why not "write nothing":** an intermediate revision defaulted the cache off
+  entirely. That fixed the litter but made every process rebuild a ~250 MB
+  table, which is the wrong trade for a table whose purpose is to be computed
+  once; it is what turned `audit/test_exploit_selftest_api` from 6.6 s into a
+  120 s CI timeout on every platform. The location was the defect, not the
+  caching.
 - **Test:** `audit/test_regression_fixed_base_cache_lifecycle.cpp`, checks
   FBC-1..4, which exercise both modes regardless of how the library was built.
 

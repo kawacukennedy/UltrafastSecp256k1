@@ -96,6 +96,7 @@
 #if defined(_WIN32)
 #include <process.h>  // _getpid()
 #include <io.h>       // _findfirst, _findnext
+#include <direct.h>   // _mkdir
 #else
 #include <unistd.h>   // getpid()
 #include <dirent.h>   // opendir, readdir
@@ -2298,18 +2299,53 @@ void invalidate_context_locked() {
 #if defined(__clang__)
 __attribute__((no_sanitize("memory")))
 #endif
-// Directory the cache lives in when the caller did not name one: the system
-// temp directory, never the current working directory. A file placed here is
-// owned by this process and removed on exit (see g_temp_cache_cleanup).
-std::string default_cache_dir() {
-    // Deliberately not std::filesystem::temp_directory_path(): it throws on a
-    // missing TMPDIR target and reads env through libstdc++ internals that MSan
-    // does not instrument. The variables below are the same ones it consults.
+// Create one directory. Existing is success; a missing parent is not created.
+bool make_directory(const std::string& path) {
+    if (path.empty()) return false;
+    struct stat st{};
+    if (::stat(path.c_str(), &st) == 0) {
+        return (st.st_mode & S_IFDIR) != 0;
+    }
+#if defined(_WIN32)
+    return _mkdir(path.c_str()) == 0 || errno == EEXIST;
+#else
+    return ::mkdir(path.c_str(), 0700) == 0 || errno == EEXIST;
+#endif
+}
+
+// mkdir -p, splitting on both separators so a Windows path works too.
+bool make_directories(const std::string& path) {
+    if (path.empty()) return false;
+    std::string built;
+    built.reserve(path.size());
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        char const c = path[i];
+        bool const sep = (c == '/' || c == '\\');
+        if (sep) {
+            // A leading "/" or a drive root ("C:\") is not a directory to create.
+            if (!built.empty() && built != "." && built.find_first_not_of("/\\") != std::string::npos &&
+                !(built.size() == 2 && built[1] == ':')) {
+                if (!make_directory(built)) return false;
+            }
+        }
+        built += c;
+    }
+    return make_directory(built);
+}
+
+// The system temp directory. Used only as a fallback when no per-user cache
+// directory can be determined -- a file placed there is session-scoped and is
+// removed when the process exits (see register_temp_cache_for_cleanup).
+//
+// Deliberately not std::filesystem::temp_directory_path(): it throws on a
+// missing TMPDIR target and reads env through libstdc++ internals that MSan
+// does not instrument. The variables below are the same ones it consults.
+std::string system_temp_dir() {
     for (const char* var : {"TMPDIR", "TMP", "TEMP"}) {
         const char* v = std::getenv(var);
         if (v && *v) {
             std::string d(v);
-            while (d.size() > 1 && d.back() == '/') d.pop_back();
+            while (d.size() > 1 && (d.back() == '/' || d.back() == '\\')) d.pop_back();
             return d;
         }
     }
@@ -2319,6 +2355,66 @@ std::string default_cache_dir() {
     return "/tmp";
 #endif
 }
+
+// Where the cache goes when the caller did not name a directory.
+//
+// The point of the cache is that the fixed-base table is built ONCE and every
+// later process loads it, so the default has to be somewhere that survives the
+// process -- the per-user cache directory the platform already reserves for
+// exactly this. Never the current working directory: a math library dropping a
+// 255 MB cache_w18.bin into whatever directory it happened to run in was
+// Eric Voskuil's report, and it is what this replaces.
+//
+//   Linux/BSD   $XDG_CACHE_HOME/secp256k1  else  $HOME/.cache/secp256k1
+//   macOS       $HOME/Library/Caches/secp256k1
+//   Windows     %LOCALAPPDATA%\secp256k1
+//
+// The same convention write_fixed_base_config() already used for the auto-tune
+// config file, so a machine keeps its table and its config side by side.
+//
+// `persistent` is false only when none of those could be determined or created
+// and we fell back to the temp directory. That is the one case where the file
+// is ours to delete on exit; a table in the user cache directory is the whole
+// point and stays.
+struct DefaultCacheDir {
+    std::string path;
+    bool persistent = false;
+};
+
+DefaultCacheDir compute_default_cache_dir() {
+    std::string user_dir;
+#if defined(_WIN32)
+    if (const char* local_app_data = std::getenv("LOCALAPPDATA")) {
+        if (*local_app_data) user_dir = std::string(local_app_data) + "\\secp256k1";
+    }
+#elif defined(__APPLE__)
+    if (const char* home = std::getenv("HOME")) {
+        if (*home) user_dir = std::string(home) + "/Library/Caches/secp256k1";
+    }
+#else
+    if (const char* xdg = std::getenv("XDG_CACHE_HOME")) {
+        if (*xdg) user_dir = std::string(xdg) + "/secp256k1";
+    }
+    if (user_dir.empty()) {
+        if (const char* home = std::getenv("HOME")) {
+            if (*home) user_dir = std::string(home) + "/.cache/secp256k1";
+        }
+    }
+#endif
+    if (!user_dir.empty() && make_directories(user_dir)) {
+        return DefaultCacheDir{user_dir, true};
+    }
+    return DefaultCacheDir{system_temp_dir(), false};
+}
+
+// Resolved once: the answer cannot change within a process, and the directory
+// creation should not be repeated on every cache lookup.
+const DefaultCacheDir& default_cache_dir_info() {
+    static const DefaultCacheDir info = compute_default_cache_dir();
+    return info;
+}
+
+std::string default_cache_dir() { return default_cache_dir_info().path; }
 
 std::string cache_filename(unsigned window_bits) {
     std::string filename = "cache_w" + std::to_string(window_bits);
@@ -2344,10 +2440,18 @@ std::string get_default_cache_path(unsigned window_bits) {
     return dir + "/" + filename;
 }
 
-// True when the cache path is one WE chose (the temp default) rather than one
-// the caller named. Only the former is ours to delete.
+// True when the cache file is a temp-directory fallback that WE chose and that
+// is therefore ours to delete on exit.
+//
+// Two things have to hold. The caller must not have named a path or directory
+// -- a named location means the caller wants the file and keeps it. And our own
+// default must have fallen back to the temp directory, which happens only when
+// no per-user cache directory could be determined or created. A table in the
+// per-user cache directory is deliberately kept: building it once and loading
+// it ever after is the entire reason the cache exists.
 bool cache_path_is_ours() {
-    return !g_config.cache_path_set && g_config.cache_dir.empty();
+    return !g_config.cache_path_set && g_config.cache_dir.empty() &&
+           !default_cache_dir_info().persistent;
 }
 
 // Remove-on-exit for a cache file this library placed in the temp directory.
@@ -2419,7 +2523,19 @@ bool save_precompute_cache_locked(const std::string& path) {
     }
     
     PrecomputeContext const& ctx = *g_context_owner;
-    
+
+    // Create the directory if the caller named one that does not exist yet.
+    // Our own default is created when it is resolved; this covers
+    // set_cache_directory() / SECP256K1_CACHE_DIR pointing somewhere new, so
+    // "name a directory and the table lands there" works on the FIRST run
+    // rather than only after someone has created it by hand.
+    {
+        std::size_t const slash = path.find_last_of("/\\");
+        if (slash != std::string::npos && slash > 0) {
+            (void)make_directories(path.substr(0, slash));
+        }
+    }
+
     // Atomic write: write to a temporary file, then rename.
     // This prevents cross-process races where a reader sees a partially-written file
     // (e.g. when CTest runs tests in parallel with -j).

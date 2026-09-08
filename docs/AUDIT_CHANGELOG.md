@@ -1,5 +1,62 @@
 # Audit Changelog
 
+## 2026-09-07 - fixed-base table: built once, saved, loaded thereafter (per-user cache directory)
+
+The disk cache is on by default again. What changed is WHERE it goes, which is
+what was actually wrong: an empty `cache_dir` used to mean the CURRENT WORKING
+DIRECTORY, so every process touching a fixed-base multiplication left a 255 MB
+`cache_w18.bin` wherever it happened to run. That was Eric Voskuil's report.
+Turning the cache off entirely fixed the litter but made every process rebuild
+a ~250 MB table, which is the wrong trade for a table whose whole purpose is to
+be computed once.
+
+The default location is now the per-user cache directory the platform reserves
+for exactly this, created if missing and kept:
+
+```
+Linux/BSD   $XDG_CACHE_HOME/secp256k1   else  ~/.cache/secp256k1
+macOS       ~/Library/Caches/secp256k1
+Windows     %LOCALAPPDATA%\secp256k1
+```
+
+the same convention `write_fixed_base_config()` already used for the auto-tune
+config, so a machine keeps its table and its config together. The system temp
+directory is now only a fallback for when none of those can be determined, and
+that fallback is the only case still deleted at exit. `set_cache_directory()` /
+`SECP256K1_CACHE_DIR` still override, and a named directory is created on the
+first save rather than only working once someone has made it by hand.
+
+`SECP256K1_FIXED_BASE_DISK_CACHE` now defaults to ON and is the opt-OUT for
+builds that must write nothing; it is defined as 0 or 1 either way, so the
+header default can never disagree with what the library was compiled with.
+
+Measured on one binary, `audit/test_exploit_selftest_api`, with
+`XDG_CACHE_HOME` pointed at a scratch directory:
+
+| | wall | what happened |
+|---|---|---|
+| run 1 | 2.68 s | built the table, wrote 255 MB to the cache directory |
+| run 2 | 0.42 s | loaded it |
+| run 3 | 0.44 s | loaded it |
+
+and the working directory stayed empty in all three.
+
+For context, the same test across today's changes:
+
+```
+6.57 s   original (cache file in the caller's CWD)
+24.7 s   cache off, every process rebuilding        <- the regression
+2.2 s    after the no-op-reconfigure fix, cache off
+0.42 s   cache on, per-user directory, reused       <- now
+```
+
+`FBC-1` in `audit/test_regression_fixed_base_cache_lifecycle.cpp` now asserts
+that the shipped default matches the build flag in BOTH directions -- a header
+that says one thing while the library was compiled expecting the other is an
+ODR-shaped mismatch, not a preference. FBC-2..4 are unchanged and still pin that
+a named directory is honoured on the first run, that nothing lands in the CWD in
+either mode, and that a caller's file is never deleted.
+
 ## 2026-09-07 - a no-op `configure_fixed_base()` rebuilt the whole fixed-base table
 
 `configure_fixed_base()` called `invalidate_context_locked()` unconditionally,

@@ -907,9 +907,10 @@ endif()
 # header would see use_cache=false while the library was built expecting true.
 if(SECP256K1_FIXED_BASE_DISK_CACHE)
     target_compile_definitions(${SECP256K1_LIB_NAME} PUBLIC SECP256K1_FIXED_BASE_DISK_CACHE=1)
-    message(STATUS "  Fixed-base disk cache: ON (table persisted; temp dir + cleanup unless a cache directory is set)")
+    message(STATUS "  Fixed-base disk cache: ON (built once, saved to the per-user cache directory, loaded thereafter)")
 else()
-    message(STATUS "  Fixed-base disk cache: OFF (table built in memory, nothing written)")
+    target_compile_definitions(${SECP256K1_LIB_NAME} PUBLIC SECP256K1_FIXED_BASE_DISK_CACHE=0)
+    message(STATUS "  Fixed-base disk cache: OFF (table rebuilt in every process, nothing written)")
 endif()
 
 # Enable fast modular reduction on x86_64 (even without ASM, uses BMI2 intrinsics)

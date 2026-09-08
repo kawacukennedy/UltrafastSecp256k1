@@ -39,7 +39,7 @@ cmake -S . -B out/mybuild -G Ninja -DCMAKE_BUILD_TYPE=Release \
 | `SECP256K1_BUILD_SHARED` | `OFF` | Build shared library |
 | `SECP256K1_BUILD_TESTS` | `ON` | Build test suite |
 | `SECP256K1_CORE_BACKEND_MODE` | `OFF` | Bitcoin Core alternative backend: CT enforced, strict ABI, RFC 6979 deterministic signing |
-| `SECP256K1_FIXED_BASE_DISK_CACHE` | `OFF` | Persist the fixed-base precompute table to disk |
+| `SECP256K1_FIXED_BASE_DISK_CACHE` | `ON` | Build the fixed-base precompute table once and reuse it from the per-user cache directory |
 | `SECP256K1_GPU_BUILD_BIP324` | `ON` | GPU BIP-324 AEAD encrypt/decrypt ops |
 | `SECP256K1_GPU_BUILD_BIP352` | `ON` | GPU BIP-352 silent-payment scan op |
 | `SECP256K1_GPU_BUILD_ECDH` | `ON` | GPU ECDH batch op (secret-bearing) |

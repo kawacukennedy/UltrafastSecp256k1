@@ -84,7 +84,7 @@ cmake -S . -B out/mybuild -G Ninja -DCMAKE_BUILD_TYPE=Release \
 | `SECP256K1_UNITY_BUILD` | `OFF` | Compile core as single TU (matches libsecp256k1 model) |
 | `SECP256K1_USE_ASM` | `ON` | Enable inline assembly optimizations (x64/RISC-V, 2-5x speedup) |
 | `SECP256K1_USE_FAST_REDUCTION` | `ON` | Use fast modular reduction (RISC-V asm, x64 BMI2) |
-| `SECP256K1_USE_LTO` | `ON` | Enable Link Time Optimization (LTO) for C++ code |
+| `SECP256K1_USE_LTO` | `ON, or OFF when CMAKE_BUILD_TYPE=Debug` | Enable Link Time Optimization (LTO) for C++ code |
 | `SECP256K1_USE_PGO_GEN` | `OFF` | Enable Profile-Guided Optimization - Generate profile |
 | `SECP256K1_USE_PGO_USE` | `OFF` | Enable Profile-Guided Optimization - Use profile |
 | `SECP256K1_USE_RISCV_FE52_ASM` | `OFF` | Use hand-written RISC-V assembly for 5x52 field multiply/square (slower on in-order cores like U74) |

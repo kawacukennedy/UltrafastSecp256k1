@@ -1,5 +1,108 @@
 # Audit Changelog
 
+## 2026-09-08 - CI spent hours doing ThinLTO on Debug sanitizer binaries
+
+Every long CI job is a build, not a test. Step timings from one push:
+
+| job | total | build | test |
+|-----|-------|-------|------|
+| MSan (ci.yml) | 127m | **127m** | 5m39s |
+| MSan (security-audit.yml) | 123m | **123m** | 4m49s |
+| ASan + UBSan (security-audit.yml) | 90m | 76m | 13m30s |
+| Sanitizers (ASan+UBSan) (ci.yml) | 74m | 65m | 8m57s |
+| linux (clang-17, Debug) | 64m | 60m | 3m52s |
+| Valgrind Memcheck | 58m | 32m | 26m25s |
+| Sanitizers (TSan) | 41m | 27m | 14m15s |
+
+Parsing the ninja progress lines out of the MSan job log splits that build:
+**1186 compiles took 10.4 min; 434 links took 112.4 min.** Median link 25 s, max
+83 s. ccache was working -- the log shows a restore-key hit, and 10 min of
+compiling for 1186 objects proves it.
+
+`src/cpu/CMakeLists.txt` exports ThinLTO to consumers:
+
+```cmake
+target_link_options(${SECP256K1_LIB_NAME} INTERFACE -flto=thin -fuse-ld=lld)
+```
+
+so every executable linking the library redoes whole-program codegen. This tree
+declares ~444 `add_executable` calls in `audit/CMakeLists.txt` alone, and
+`SECP256K1_USE_LTO` defaulted `ON` with no build-type guard, so the MSan job
+(Debug + `-fsanitize=memory` + `-fsanitize-memory-track-origins=2`) ThinLTO'd
+434 binaries in order to run 15 of them. Its own configure log says so:
+
+```
+-- Secp256k1: LTO check - SECP256K1_USE_LTO=ON, Compiler=Clang
+-- Secp256k1: OK LTO ENABLED (ThinLTO with Clang + lld, INTERFACE propagated)
+```
+
+Optimizing a binary that runs once, under 10-20x instrumentation, to find a bug.
+
+**Measured, controlled A/B.** One machine (16 cores), clang-18, Debug,
+`-DSECP256K1_USE_ASM=OFF`, the same 85 targets built in both configurations,
+per-edge times read from ninja's own `.ninja_log` rather than wall clock:
+
+|                        | LTO ON | LTO OFF | ratio |
+|------------------------|--------|---------|-------|
+| link CPU, 85 targets   | 2110.65 s | 18.54 s | **114x** |
+| median link            | 25.11 s | 0.21 s | 117x |
+| max link               | 83.11 s | 0.41 s | 201x |
+| compile CPU, 180 objs  | 622.40 s | 481.48 s | 1.3x |
+
+Compilation is faster too -- `-flto=thin` slows the compile side as well. The
+ranges are not close to overlapping; this is not noise.
+
+A full Debug build then completes end to end: 1643 ninja edges, 1200 compiles
+and 453 links, **157.17 s wall** on 16 cores, exit 0. Link CPU is 2.0 min out of
+41.3 min -- **4.9% of the build**, against 91.5% in the CI MSan job. Median link
+0.24 s, max 1.83 s.
+
+What this does NOT claim: a CI number. That machine has 16 cores, GitHub's has
+4, and CI's compile side is ccache-warm while this build was cold. The measured
+claim is the 114x on link CPU and the 91.5% -> 4.9% shift in where build time
+goes. What the sanitizer jobs actually cost after this lands is whatever the
+next run reports.
+
+`SECP256K1_USE_LTO` now defaults `OFF` when `CMAKE_BUILD_TYPE` is `Debug` and
+`ON` otherwise. Release, RelWithDebInfo and MinSizeRel are untouched, so every
+benchmark, release artifact and reproducible-build job keeps LTO exactly as
+before -- no performance claim in any document changes. `option()` does not
+overwrite a cache entry the caller set, so `-DSECP256K1_USE_LTO=ON` still forces
+it on in Debug.
+
+**New gate: `ci/check_lto_build_type_default.py`** (LTO-1..3), wired into
+`run_fast_gates.sh`. It runs three real `cmake` configures into throwaway
+directories and reads the verdict back out of `CMakeCache.txt`, so it tests the
+build system as CI invokes it rather than pattern-matching the CMakeLists text:
+
+- LTO-1 Debug defaults OFF
+- LTO-2 Release defaults ON -- the negative control, without which LTO-1 would
+  also pass against "LTO deleted entirely"
+- LTO-3 Debug plus an explicit `-DSECP256K1_USE_LTO=ON` stays ON
+
+3/3 in 4.0 s. Mutation check: restoring the unconditional `option(... ON)` gives
+1/3 failed, naming LTO-1 and printing the reason.
+
+**`gen_build_options.py` no longer renders a variable as a default.** A computed
+default made the table print the literal `${_secp256k1_lto_default}`. The
+generator now reads a `# gen_build_options-default:` annotation from the comment
+block directly above the declaration, and refuses to write the doc at all if a
+`${...}` default has no annotation -- so this cannot silently degrade again for
+the next computed default. Its self-test still passes 100%.
+
+Not changed, recorded for whoever picks it up:
+
+- The three sanitizers run **twice** per push, once in `ci.yml` and once in
+  `security-audit.yml`. They are not quite identical -- the security-audit ASan
+  job has a `Selftest under sanitizers` step (CORR-01) the ci.yml one lacks --
+  so merging them is real work, not a deletion.
+- MSan builds 434 executables to run 15. With LTO off the build is no longer the
+  bottleneck, but `cmake --build --target <list>` would still cut it further.
+- The Release jobs (`linux-arm64` 48m, `linux-riscv64` 55m, `rocm` 37m,
+  `macos` 29m, benchmark 33m build) keep full ThinLTO across all ~434 test
+  executables. Whether test binaries need LTO in Release is the same question,
+  unanswered here.
+
 ## 2026-09-08 - Metal audit: Schnorr signing failed on an unbound kernel argument
 
 The advisory Metal audit on the macOS runner reported `ISSUES-FOUND` with all

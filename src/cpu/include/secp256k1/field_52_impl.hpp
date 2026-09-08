@@ -280,6 +280,19 @@ using namespace fe52_constants;
 // exactly as the x86-64 result predicted, and the consumer-side size cost was
 // +1.2% on their linked extension.
 //
+// Re-confirmed on the SHIPPED default with no define set anywhere (dev
+// 2e9bf5ba, same protocol and machine): batch 12.53-12.65s, per-row
+// 13.12-13.38s, instructions retired 6.49T / 6.55T -- matching the
+// flag-injected legs to three digits, so the source-level always_inline and a
+// -D on the command line produce the same code on that compiler.
+//
+// RESIDUAL, recorded because it is real: the BATCH path is at parity with
+// v3.68.0 (12.53-12.65s vs 12.3-12.7s, ranges overlap; +1.1% instructions).
+// The PER-ROW path is not -- 13.12-13.38s against the same baseline, ranges
+// that do NOT overlap, so roughly 5% of user time is still unaccounted for on
+// the old API. The reporter adopted the batch path and closed the issue on
+// that basis. Anyone chasing the last 5% starts here, not from zero.
+//
 // COST: libfastsecp256k1.a grows 14.84% on x86-64 and 22.4% on arm64
 // (18.77 MB -> 22.98 MB, measured on the same NDK build). That is the trade.
 //

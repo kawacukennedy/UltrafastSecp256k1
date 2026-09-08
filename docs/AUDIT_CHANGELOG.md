@@ -1,5 +1,50 @@
 # Audit Changelog
 
+## 2026-09-08 - Valgrind failed intermittently on thread TLS that is alive by design
+
+`Valgrind Memcheck` went red with "Valgrind found memory errors" while the same
+content passed on `dev`. One error, one context:
+
+```
+960 bytes in 3 blocks are possibly lost in loss record 5 of 7
+  at calloc / allocate_dtv (dl-tls.c:370) / _dl_allocate_tls (dl-tls.c:629)
+  by allocate_stack / pthread_create@@GLIBC_2.34
+  by std::thread::_M_start_thread
+  by batch_pool.hpp:40 <- batch_verify.cpp:76
+  by secp256k1::ecdsa_batch_verify_mt (batch_verify.cpp:787)
+```
+
+`detail::batch_worker_pool()` is a deliberately leaked singleton, and
+`src/cpu/src/batch_verify.cpp` says why at the definition: its destructor would
+join the workers at static-destruction time, which on Windows runs during DLL
+unload with the loader lock held, and joining there deadlocks because the
+workers need that same lock to exit. So the pool's threads are still RUNNING
+when the process exits, and glibc's per-thread dynamic thread vector --
+allocated inside `pthread_create` -- has no pointer Valgrind can follow.
+"Possibly lost" is exactly the right report for that, and it is not a leak:
+the threads are alive on purpose and the OS reclaims their stacks and TLS.
+
+The gate includes `possible` in `--errors-for-leak-kinds`, so it failed whenever
+the pool had spawned threads and the record was not already covered. It was
+intermittent because the byte/block count depends on how many workers ran before
+exit -- the same run showed 1,365,184 bytes in 12 blocks already suppressed and
+3 blocks slipping through.
+
+`ci/valgrind.supp` gains a rule scoped to the `pthread_create` TLS allocation
+specifically. Definite and indirect leaks are untouched anywhere, and a real
+leak in the batch path -- anything our own code allocates and drops -- is still
+reported, because the pattern requires `_dl_allocate_tls`, which this library
+never calls.
+
+Reproduced and verified locally on `test_regression_ecdsa_batch_verify_mt`:
+
+```
+before:  possibly lost 4,800 bytes in 15 blocks
+         ERROR SUMMARY: 3 errors from 3 contexts (suppressed: 0)   exit 1
+after:   definitely lost 0 / indirectly lost 0 / possibly lost 0
+         ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 3 from 3)   exit 0
+```
+
 ## 2026-09-08 - three CI gates that could fail without anything being wrong
 
 The fixed-base cache change made the suite roughly 20x faster on macOS (the

@@ -4459,6 +4459,10 @@ add_executable(unified_audit_runner
     # Regression: FE64 reduce() carry propagation in field.cpp (2026-05-14)
     # Guards the result[2]→[3]→[4] cascade for (2^255-1)^2 mod p.
     test_regression_field_reduce_carry.cpp
+    # Regression: FE26 exact-limb KATs vs Python truth (2026-09-08)
+    # Guards the fe26 equivalent of the reduce-carry loss: exact 32-byte
+    # comparison on the trigger family, never normalized operator==.
+    test_regression_field_26_exact_limb.cpp
     # Regression: 64x64->128 multiply path equivalence (Windows-ARM64 clang-cl port, 2026-06-16)
     # Guards precompute.cpp _umul128 + detail::mulhi64 routed off the x86-only MSVC intrinsic.
     test_regression_mul128_portability.cpp
@@ -5342,6 +5346,19 @@ target_compile_definitions(test_regression_field_reduce_carry_standalone PRIVATE
 add_test(NAME regression_field_reduce_carry
     COMMAND test_regression_field_reduce_carry_standalone)
 set_tests_properties(regression_field_reduce_carry PROPERTIES TIMEOUT 30
+    LABELS "audit;math;regression;field")
+
+# 2026-09-08: exact-limb regression guard for FE26 (10x26), the production
+# field on ARM64 and 32-bit targets. Mirrors the FE64 reduce-carry guard but
+# at raw-limb/byte granularity (no operator== normalization), so an equivalent
+# carry loss in fe26 would be caught here.
+add_executable(test_regression_field_26_exact_limb_standalone
+    test_regression_field_26_exact_limb.cpp)
+audit_target_defaults(test_regression_field_26_exact_limb_standalone)
+target_compile_definitions(test_regression_field_26_exact_limb_standalone PRIVATE STANDALONE_TEST)
+add_test(NAME regression_field_26_exact_limb
+    COMMAND test_regression_field_26_exact_limb_standalone)
+set_tests_properties(regression_field_26_exact_limb PROPERTIES TIMEOUT 60
     LABELS "audit;math;regression;field")
 
 # Regression: 64x64->128 multiply path equivalence — guards the Windows-ARM64

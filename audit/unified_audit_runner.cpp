@@ -671,6 +671,7 @@ int test_regression_schnorr_abi_edge_cases_run();        // TQ-005: Schnorr r==0
 int test_regression_ct_mixed_add_magnitude_run();        // CA-mixed-add: point_add_mixed_complete magnitude contract
 int test_regression_ct_sanitizer_detection_run();        // 2026-05-14: Clang TSan/MSan/ASan macro detection in ct_field.cpp
 int test_regression_field_reduce_carry_run();            // 2026-05-14: FE64 reduce() carry propagation result[2..4]
+int test_regression_field_26_exact_limb_run();           // 2026-09-08: FE26 exact-limb KATs (Python truth) — fe26 equivalent of the reduce-carry guard
 int test_regression_mul128_portability_run();            // 2026-06-16: 64x64->128 multiply path equivalence (Windows-ARM64 clang-cl port)
 int test_regression_shim_static_ctx_run();              // ecf47967: g_static_ctx PERF-005 field alignment fix
 int test_regression_ellswift_ct_path_run();              // CT-001: ellswift_create CT path + XDH round-trip
@@ -876,6 +877,7 @@ static const AuditModule ALL_MODULES[] = {
     { "field_52",          "FieldElement52 (5x52) vs 4x64",               "math_invariants", test_field_52_main, false },
 #endif
     { "field_26",          "FieldElement26 (10x26) vs 4x64",              "math_invariants", test_field_26_main, false },
+    { "regression_field_26_exact_limb", "FE26 exact-limb KATs + trigger family (Python truth)", "math_invariants", test_regression_field_26_exact_limb_run, false },
 
     // ===================================================================
     // Section 2: Constant-Time / Side-Channel Analysis

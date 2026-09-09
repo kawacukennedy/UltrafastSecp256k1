@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (see the "Field-kernel inlining policy" block in `field_52_impl.hpp`):
   `optimize("O2") + noinline` on GCC, plain `noinline` on clang, which drops
   the remaining two spurious warnings per translation unit on clang builds.
+- Added an exact-limb regression audit for the `fe26` field path
+  (`test_regression_field_26_exact_limb.cpp`), the fe26 equivalent of the
+  FE64 reduce-carry guard added in 1548d44. It pins the trigger family
+  (`2^256-2^33-1`, `2^255-1`, `p-1`, `p`, `2^256-1`) plus 200,000 randomized
+  mul/sqr/add rows against Python big-int ground truth at exact 32-byte
+  granularity — never through normalized `operator==` — so an equivalent
+  carry loss in `fe26` (the production field on ARM64 and 32-bit targets)
+  is caught by this module before any downstream module. Registered in the
+  unified audit runner under `math_invariants`.
 
 ### Credited
 

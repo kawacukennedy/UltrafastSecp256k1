@@ -1,6 +1,28 @@
 # Secret Lifecycle Review
 
-**Last updated**: 2026-09-07 | **Version**: 4.5.0
+**Last updated**: 2026-09-10 | **Version**: 4.5.0
+
+### 2026-09-10 - GPU compact-ECDSA strict-range guard (`src/cuda/include/ecdsa.cuh`, Metal shader, OpenCL kernel): no secret lifecycle change
+
+`ecdsa_verify()` on each GPU backend now rejects a compact signature whose `r >= n`
+or `s >= n` before any verification work. The gate-watched surfaces touched are
+the GPU verify sources and `CHANGELOG.md`; this entry answers the classification
+rather than waiving it.
+
+**Secret-buffer and zeroization verdict: unchanged.** The guard operates on the
+two public scalars of the already-parsed 64-byte compact signature. No new
+resident secret buffer is created and no `secure_erase` site is added or removed;
+the failure exits return before the verify math that would allocate
+secret-path state.
+
+**Fail-closed input handling.** In section `[B]` of
+`audit/test_gpu_ecdsa_compact_range.cpp` the collect key buffer is
+seeded with `0xEE` and the test asserts each `r >= n` / `s >= n` row is left
+exactly at that seed — invalid inputs write no state a later collect step could
+mistake for a verdict. This matches the existing gather/collect contract that
+invalid inputs must not partially mutate secret or verdict buffers. Compare the SHA-256
+message-comparison guard in `src/gpu/src/gpu_backend_cuda.cu`, which already
+specified the fail-closed collect contract this regression restores.
 
 ### 2026-09-07 - Affine-materialisation / in-place / RFC-6979-midstate wave: two secure_erase sites removed, one process-lifetime static added
 

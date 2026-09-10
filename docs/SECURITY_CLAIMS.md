@@ -2,6 +2,45 @@
 
 **UltrafastSecp256k1 v4.5.0** -- FAST / CT Dual-Layer Architecture (CPU + GPU)
 
+### 2026-09-10 - Strict compact-ECDSA range (`r`,`s` in `[1, n-1]`) enforced uniformly on every GPU verify path
+
+The compact-ECDSA strictness guard added in this wave is a verification-contract
+alignment, not a CT boundary change. It is recorded here because the secret-path
+gate classifies the GPU verify sources and `CHANGELOG.md` as CT secret-bearing
+surfaces.
+
+**1. The disagreement it removes**
+
+For a 64-byte compact signature, "valid" previously depended on which GPU route
+handled the row. CUDA's batch kernel and the OpenCL parsers rejected `r >= n`
+or `s >= n` (strict compact parse); CUDA's collect kernel, Metal's
+batch/collect, and the device-side single-verify path reduced the raw limbs
+mod `n` before comparing, so the non-canonical `(r, s + n)` encoding (congruent
+mod `n`, and representable in 32 bytes whenever `s < 2^256 - n`) verified
+exactly like the canonical one. The same 64 bytes changed meaning by entrypoint,
+which also broke the documented guarantee in `src/gpu/src/gpu_backend_cuda.cu`
+that the collect verdict is bit-identical to `verify_batch`.
+
+- **Security claim: one uniform contract.** Every device-side `ecdsa_verify()`
+  (the single choke point shared by the single/batch/collect entrypoints and the
+  sign-and-verify countermeasure) now rejects `r >= n || s >= n` up front.
+  Boundary inputs verify identically against the CPU strict oracle
+  (`ufsecp_ecdsa_verify`, `parse_compact_strict` + low-S), so a compact
+  signature either verifies everywhere or nowhere across CPU, CUDA, OpenCL and
+  Metal.
+- **No CT boundary change:** `r` and `s` are PUBLIC bytes of the signature. The
+  guard is a fixed-limb `>=` comparison with no secret-dependent branch or
+  memory access, and it runs before any secret-touching verify math.
+- **No secret lifecycle change:** no new resident secret buffer, no added or
+  removed `secure_erase` site — see `docs/SECRET_LIFECYCLE.md` for the pairing.
+- **Tests:** `audit/test_regression_gpu_ecdsa_compact_range.cpp` — `[A]` a
+  CPU-only source gate pins the guard in the CUDA `.cuh`, Metal shader and
+  OpenCL kernel (renders the divergence un-buildable); `[B]` an on-device
+  boundary differential over `{0, n-1, n, 2^256-1, s+n}` rows through both
+  batch and collect, checked row-by-row against the CPU oracle. Invalid rows
+  stay at the seeded marker (fail-closed). Rows are synced into
+  `docs/CT_VERIFICATION.md` / `docs/TEST_MATRIX.md` by `ci/sync_all_docs.py`.
+
 ### 2026-09-07 - Fixed-base disk cache OFF by default, FE52 kernels always inlined, PT_TLS alignment (build-surface changes; no CT boundary moves)
 
 Three changes in this wave touch the root `CMakeLists.txt` and the FE52 field

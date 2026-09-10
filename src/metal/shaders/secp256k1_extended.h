@@ -1040,9 +1040,27 @@ inline bool ecdsa_sign(thread const uchar msg_hash[32], thread const Scalar256 &
 }
 #endif // !SECP256K1_METAL_SCAN_ONLY
 
+// Compare a parsed 8x32-bit scalar (limbs[7] = most-significant word, matching
+// SECP256K1_N[8] layout) against the group order; true when s >= n (out of
+// range). Parity with the strict compact-parse contract of CUDA/OpenCL: an
+// r/s >= n compact encoding is non-canonical and must NOT verify, otherwise the
+// collect/batch paths would accept s+n malleations that CPU/batch reject.
+inline bool scalar256_ge_n(thread const Scalar256 &s) {
+    for (int i = 7; i >= 0; --i) {
+        if (s.limbs[i] > SECP256K1_N[i]) return true;
+        if (s.limbs[i] < SECP256K1_N[i]) return false;
+    }
+    return true;   // s == n -> out of range
+}
+
 inline bool ecdsa_verify(thread const uchar msg_hash[32], thread const JacobianPoint &pubkey,
                           thread const ECDSASignature &sig) {
     if (scalar256_is_zero(sig.r) || scalar256_is_zero(sig.s)) return false;
+
+    // Reject out-of-range compact scalars (r >= n or s >= n) so every Metal
+    // verify route matches the strict compact-parse contract of CUDA/OpenCL
+    // (batch_compressed + lbtc collect previously reduced s+n mod n here).
+    if (scalar256_ge_n(sig.r) || scalar256_ge_n(sig.s)) return false;
 
     Scalar256 z = scalar_from_bytes(msg_hash);
     Scalar256 s_inv = scalar_inverse(sig.s);

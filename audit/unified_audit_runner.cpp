@@ -163,6 +163,7 @@ int test_gpu_abi_gate_run();          // Discovery, lifecycle, ops-if-available
 int test_gpu_zk_prove_verify_differential_run(); // CPU range-proof → GPU poly-check accept/reject
 int test_gpu_lbtc_columns_diff_run(); // GPU vs CPU lbtc columns + engine dispatcher fallback
 int test_gpu_collect_verify_parity_run(); // native collect verdict == verify_batch verdict (per-row)
+int test_regression_gpu_ecdsa_compact_range_run(); // GPU ECDSA strict r/s<n range: source gate + boundary differential
 int test_regression_hash256_var_batch_run(); // hash256_var batch structural/boundary KAT vs SHA256::hash256 oracle
 int test_regression_hash256_var_parity_run(); // hash256_var cross-backend (CUDA/OpenCL/Metal) byte-identical parity
 int test_regression_merkle_pair_hash_run(); // merkle_pair_hash structural/boundary KAT + cross-backend parity vs SHA256::hash256 oracle
@@ -941,6 +942,11 @@ static const AuditModule ALL_MODULES[] = {
     // the on-device collect-vs-verify_batch per-row parity self-skips when no GPU
     // backend is present (or a backend lacks a native collect override).
     { "gpu_collect_verify_parity", "GPU collect-verify parity (native OpenCL/Metal/CUDA collect == verify_batch verdict)", "differential", test_gpu_collect_verify_parity_run, false },
+    // advisory=false: the CPU-only source gate scans the in-tree kernel sources
+    // and MUST pass everywhere (it failed against the pre-fix permissive
+    // ecdsa_verify paths); the on-device boundary-scalar differential
+    // self-skips when no GPU backend is available.
+    { "gpu_ecdsa_compact_range", "GPU ECDSA compact-sig strict r/s<n range (source gate + boundary-scalar differential)", "differential", test_regression_gpu_ecdsa_compact_range_run, false },
     // advisory=false: null-ctx contract runs CPU-only and MUST pass everywhere;
     // the on-device KAT/boundary checks (per backend) self-skip when no GPU
     // backend is compiled in or a device is unavailable.

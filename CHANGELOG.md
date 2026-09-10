@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry loss in `fe26` (the production field on ARM64 and 32-bit targets)
   is caught by this module before any downstream module. Registered in the
   unified audit runner under `math_invariants`.
+- Enforced a uniform strict compact-ECDSA scalar contract on every GPU verify
+  path. Previously the device-side `ecdsa_verify()` in the CUDA, Metal and
+  OpenCL backends only rejected zero scalars and silently reduced any `r`/`s`
+  limb value `>= n` modulo the group order: the CUDA `ecdsa_verify_collect`
+  kernel and the Metal `ecdsa_verify_batch_compressed` / `lbtc_ecdsa_verify_collect`
+  shaders therefore accepted the `s+n` congruent-malleation encoding that the
+  CUDA batch kernel, OpenCL and the CPU strict parse all reject — violating the
+  documented "collect verdict is bit-identical to verify_batch" invariant. Each
+  backend's `ecdsa_verify` now rejects `r >= n` or `s >= n` up front (single
+  choke point shared by single/batch/collect and sign-and-verify), and a
+  regression audit (`test_regression_gpu_ecdsa_compact_range.cpp`) pins it with
+  an always-run CPU source gate (failed against the pre-fix sources) plus an
+  on-device `{0, n-1, n, 2^256-1, s+n}` boundary-scalar differential that
+  self-skips without a GPU.
 
 ### Credited
 

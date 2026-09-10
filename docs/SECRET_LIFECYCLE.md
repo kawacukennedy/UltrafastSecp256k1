@@ -16,13 +16,13 @@ the failure exits return before the verify math that would allocate
 secret-path state.
 
 **Fail-closed input handling.** In section `[B]` of
-`audit/test_regression_gpu_ecdsa_compact_range.cpp` the collect key buffer is
+`audit/test_gpu_ecdsa_compact_range.cpp` the collect key buffer is
 seeded with `0xEE` and the test asserts each `r >= n` / `s >= n` row is left
 exactly at that seed — invalid inputs write no state a later collect step could
-mistake for a verdict. This matches the existing ABI contract that invalid
-inputs must not partially mutate secret or verdict buffers. Compare the SHA-256
+mistake for a verdict. This matches the existing gather/collect contract that
+invalid inputs must not partially mutate secret or verdict buffers. Compare the SHA-256
 message-comparison guard in `src/gpu/src/gpu_backend_cuda.cu`, which already
-specified the fail-closed collect contract this alignment restores.
+specified the fail-closed collect contract this regression restores.
 
 ### 2026-09-07 - Affine-materialisation / in-place / RFC-6979-midstate wave: two secure_erase sites removed, one process-lifetime static added
 

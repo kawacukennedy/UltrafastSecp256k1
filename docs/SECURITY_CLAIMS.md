@@ -33,12 +33,14 @@ that the collect verdict is bit-identical to `verify_batch`.
   memory access, and it runs before any secret-touching verify math.
 - **No secret lifecycle change:** no new resident secret buffer, no added or
   removed `secure_erase` site — see `docs/SECRET_LIFECYCLE.md` for the pairing.
-- **Tests:** `audit/test_regression_gpu_ecdsa_compact_range.cpp` — `[A]` a
-  CPU-only source gate pins the guard in the CUDA `.cuh`, Metal shader and
-  OpenCL kernel (renders the divergence un-buildable); `[B]` an on-device
-  boundary differential over `{0, n-1, n, 2^256-1, s+n}` rows through both
-  batch and collect, checked row-by-row against the CPU oracle. Invalid rows
-  stay at the seeded marker (fail-closed). Rows are synced into
+- **Tests:** `audit/test_gpu_ecdsa_compact_range.cpp` — `[A]` a
+  CPU-only source gate pins the guard inside each backend's `ecdsa_verify()`
+  body (before `scalar_inverse`), so a guard stranded in a helper no verify
+  path calls cannot satisfy it; `[B]` an on-device boundary differential over
+  a small-`(r, s)` recovered base and its congruent malleations
+  `(r, s+n)/(r+n, s)/(r+n, s+n)` plus the `{0, n-1, n, 2^256-1}` extremes,
+  through both batch and collect, checked row-by-row against the CPU oracle.
+  Invalid rows stay at the seeded marker (fail-closed). Rows are synced into
   `docs/CT_VERIFICATION.md` / `docs/TEST_MATRIX.md` by `ci/sync_all_docs.py`.
 
 ### 2026-09-07 - Fixed-base disk cache OFF by default, FE52 kernels always inlined, PT_TLS alignment (build-surface changes; no CT boundary moves)

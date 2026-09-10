@@ -30,15 +30,22 @@
  * compact contract across CPU, CUDA, OpenCL and Metal.
  *
  * This module pins the fix two ways:
- *   [A] CPU-only SOURCE GATE (always runs, every runner): scans the in-tree
- *       kernel sources and asserts the strict range guard is present in each
- *       backend's ecdsa_verify() and that the CUDA batch kernel keeps its
- *       strict parse. This FAILED against the pre-fix sources, so it is the
- *       real always-bit-rot regression gate.
+ *   [A] CPU-only SOURCE GATE (always runs, every runner): locates each
+ *       backend's ecdsa_verify() / ecdsa_verify_impl() function definition,
+ *       brace-matches its body and asserts the strict r/s >= n guard appears
+ *       INSIDE that body, before the scalar_inverse() call. A guard stranded
+ *       in a helper no verify path calls no longer satisfies the gate. This
+ *       FAILED against the pre-fix sources, so it is the real always-bit-rot
+ *       regression gate.
  *   [B] On-device BOUNDARY-SCALAR differential (advisory; self-skips when no
- *       GPU backend is available): feeds r/s on the {0, n-1, n, 2^256-1,
- *       s+n-congruent class} boundaries through BOTH the batch and collect
- *       entrypoints and asserts per-row uniformity with the CPU strict oracle.
+ *       GPU backend is available): builds a valid base signature with a SMALL
+ *       r and SMALL s (r = 1, s = 0x0307) via ufsecp_ecdsa_recover, so every
+ *       congruent malleation -- (r, s+n), (r+n, s), (r+n, s+n) -- is
+ *       32-byte-representable and the collect-vs-batch divergence is actually
+ *       exercisable on hardware. Rows are fed through BOTH the batch and
+ *       collect entrypoints and asserted uniform per-row against the CPU strict
+ *       oracle; the base row must pass both (a guard that rejects everything
+ *       would fail here too).
  *
  * PUBLIC-DATA inputs only; verify is variable-time by design. No GPU needed to
  * build/run the source gate; the on-device part self-skips cleanly (operational
@@ -112,24 +119,79 @@ void copy32(const uint8_t src[32], uint8_t dst[32]) { std::memcpy(dst, src, 32);
 
 // ---------------------------------------------------------------------------
 // [A] CPU-only source gate -- runs on EVERY runner, no GPU required. Each
-//     backend's device ecdsa_verify() must carry the strict >= n guard; the
-//     CUDA batch kernel must keep its strict compact parse. These CHECKs fail
-//     against the pre-fix sources, so this section trees the regression even
+//     backend's device ecdsa_verify() must carry the strict >= n guard, scoped
+//     to the actual function body and ordered before the scalar_inverse() call;
+//     the CUDA batch kernel must keep its strict compact parse. These CHECKs
+//     fail against the pre-fix sources (and against a guard stranded in a
+//     helper no verify path calls), so this section trees the regression even
 //     on CPU-only CI (no GPU ever exercised it).
 // ---------------------------------------------------------------------------
+
+// Extract the body of a function whose signature starts at sig_pos: from the
+// opening brace to the matching close, skipping strings, line and block
+// comments. Empty string on any failure (which the CHECKs then flag).
+std::string extract_function_body(const std::string& src, size_t sig_pos) {
+    const size_t n = src.size();
+    const size_t brace = src.find('{', sig_pos);
+    if (brace == std::string::npos) return {};
+    int depth = 0;
+    bool in_str = false, in_line = false, in_block = false;
+    for (size_t i = brace; i < n; ++i) {
+        const char c = src[i];
+        if (in_line) {
+            if (c == '\n') in_line = false;
+            continue;
+        }
+        if (in_block) {
+            if (c == '*' && i + 1 < n && src[i + 1] == '/') { in_block = false; ++i; }
+            continue;
+        }
+        if (in_str) {
+            if (c == '\\') { ++i; continue; }
+            if (c == '"') in_str = false;
+            continue;
+        }
+        if (c == '/' && i + 1 < n) {
+            if (src[i + 1] == '/') { in_line = true; ++i; continue; }
+            if (src[i + 1] == '*') { in_block = true; ++i; continue; }
+        }
+        if (c == '"') { in_str = true; continue; }
+        if (c == '{') { ++depth; continue; }
+        if (c == '}') {
+            --depth;
+            if (depth == 0) return src.substr(brace + 1, i - brace - 1);
+        }
+    }
+    return {};
+}
+
+// True when guard appears in body before the scalar_inverse() call
+// ("scalar_inverse" also matches scalar_inverse_impl in the OpenCL kernel).
+bool guard_before_inverse(const std::string& body, const std::string& guard) {
+    const size_t g = body.find(guard);
+    if (g == std::string::npos) return false;
+    const size_t inv = body.find("scalar_inverse");
+    return inv != std::string::npos && g < inv;
+}
+
 void test_source_gate() {
     AUDIT_LOG("[gpu_ecdsa_compact_range] source gate (CPU-only, always runs)\n");
 
-    // -- CUDA: device ecdsa_verify() reject r/s >= n (ecdsa.cuh), and the
-    //    batch kernel keeps the strict compact parse (secp256k1.cu). ------
+    // -- CUDA: strict guard inside ecdsa_verify(), before scalar_inverse(),
+    //    and the batch kernel keeps its strict compact parse. ------------
     {
         std::string cuh = audit_read_source_file("src/cuda/include/ecdsa.cuh");
         CHECK(!cuh.empty(), "src/cuda/include/ecdsa.cuh must be readable (in-tree source)");
         if (!cuh.empty()) {
-            CHECK(cuh.find("scalar_ge(&sig->r, ORDER)") != std::string::npos,
-                  "[A] CUDA ecdsa_verify rejects r >= n (scalar_ge guard)");
-            CHECK(cuh.find("scalar_ge(&sig->s, ORDER)") != std::string::npos,
-                  "[A] CUDA ecdsa_verify rejects s >= n (scalar_ge guard)");
+            const size_t sig = cuh.find("bool ecdsa_verify(");
+            const std::string body = extract_function_body(cuh, sig);
+            CHECK(!body.empty(), "[A] CUDA ecdsa_verify( definition found and brace-matched");
+            if (!body.empty()) {
+                CHECK(guard_before_inverse(body, "scalar_ge(&sig->r, ORDER)"),
+                      "[A] CUDA ecdsa_verify rejects r >= n inside its body, before scalar_inverse");
+                CHECK(guard_before_inverse(body, "scalar_ge(&sig->s, ORDER)"),
+                      "[A] CUDA ecdsa_verify rejects s >= n inside its body, before scalar_inverse");
+            }
         }
         std::string cu = audit_read_source_file("src/cuda/src/secp256k1.cu");
         CHECK(!cu.empty(), "src/cuda/src/secp256k1.cu must be readable (in-tree source)");
@@ -139,60 +201,79 @@ void test_source_gate() {
         }
     }
 
-    // -- Metal: ecdsa_verify() reject r/s >= n (secp256k1_extended.h) via the
-    //    scalar256_ge_n() helper that compares limbs against SECP256K1_N. --
+    // -- Metal: guard inside the 3-arg ecdsa_verify( overload -- the choke
+    //    point the 4-arg overload and both batch/collect kernels delegate to --
+    //    comparing sig.r/sig.s against the order built from SECP256K1_N. ---
     {
         std::string mh = audit_read_source_file("src/metal/shaders/secp256k1_extended.h");
         CHECK(!mh.empty(), "src/metal/shaders/secp256k1_extended.h must be readable (in-tree source)");
         if (!mh.empty()) {
-            CHECK(mh.find("inline bool scalar256_ge_n") != std::string::npos,
-                  "[A] Metal defines scalar256_ge_n() range helper");
-            CHECK(mh.find("scalar256_ge_n(sig.r)") != std::string::npos,
-                  "[A] Metal ecdsa_verify rejects r >= n (scalar256_ge_n guard)");
-            CHECK(mh.find("scalar256_ge_n(sig.s)") != std::string::npos,
-                  "[A] Metal ecdsa_verify rejects s >= n (scalar256_ge_n guard)");
+            const size_t sig = mh.find("bool ecdsa_verify(thread const uchar");
+            const std::string body = extract_function_body(mh, sig);
+            CHECK(!body.empty(), "[A] Metal ecdsa_verify( 3-arg definition found and brace-matched");
+            if (!body.empty()) {
+                CHECK(guard_before_inverse(body, "scalar256_ge(sig.r, order_n)"),
+                      "[A] Metal ecdsa_verify rejects r >= n inside its body, before scalar_inverse");
+                CHECK(guard_before_inverse(body, "scalar256_ge(sig.s, order_n)"),
+                      "[A] Metal ecdsa_verify rejects s >= n inside its body, before scalar_inverse");
+            }
         }
     }
 
-    // -- OpenCL: ecdsa_verify_impl() reject r/s >= n (secp256k1_extended.cl)
-    //    using the same lbtc_scalar_ge_order() primitive the strict compact
-    //    parser already uses. ----------------------------------------------
+    // -- OpenCL: guard inside ecdsa_verify_impl(), before
+    //    scalar_inverse_impl(). Defense in depth (OpenCL parsers were already
+    //    strict) but the choke point must still carry it. -----------------
     {
         std::string cl = audit_read_source_file("src/opencl/kernels/secp256k1_extended.cl");
         CHECK(!cl.empty(), "src/opencl/kernels/secp256k1_extended.cl must be readable (in-tree source)");
         if (!cl.empty()) {
-            CHECK(cl.find("lbtc_scalar_ge_order(&sig->r)") != std::string::npos,
-                  "[A] OpenCL ecdsa_verify_impl rejects r >= n (lbtc_scalar_ge_order guard)");
-            CHECK(cl.find("lbtc_scalar_ge_order(&sig->s)") != std::string::npos,
-                  "[A] OpenCL ecdsa_verify_impl rejects s >= n (lbtc_scalar_ge_order guard)");
+            const size_t sig = cl.find("int ecdsa_verify_impl(");
+            const std::string body = extract_function_body(cl, sig);
+            CHECK(!body.empty(), "[A] OpenCL ecdsa_verify_impl( definition found and brace-matched");
+            if (!body.empty()) {
+                CHECK(guard_before_inverse(body, "lbtc_scalar_ge_order(&sig->r)"),
+                      "[A] OpenCL ecdsa_verify_impl rejects r >= n inside its body, before scalar_inverse");
+                CHECK(guard_before_inverse(body, "lbtc_scalar_ge_order(&sig->s)"),
+                      "[A] OpenCL ecdsa_verify_impl rejects s >= n inside its body, before scalar_inverse");
+            }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
 // [B] On-device boundary-scalar differential (advisory; self-skips w/o GPU).
-//     Builds one valid compressed compact row plus a family of boundary
-//     encodings and asserts the batch/collect per-row verdicts are uniform with
-//     the CPU strict oracle (ufsecp_ecdsa_verify: parse_compact_strict + low-S).
+//     Builds one valid compact row whose r and s are SMALL (r = 1, s = 0x0307)
+//     by signing-recovering the matching public key, so every congruent
+//     malleation (r, s+n), (r+n, s), (r+n, s+n) fits in 32 bytes and actually
+//     reaches the device. Verdicts are asserted uniform with the CPU strict
+//     oracle (ufsecp_ecdsa_verify: parse_compact_strict + low-S).
 // ---------------------------------------------------------------------------
 struct Row {
     const char* label;
     bool       want_valid;   // expected per the CPU strict oracle
 };
 
-// Deterministically produce a LOW-S compact signature accepted by the CPU
-// strict oracle. Returns false if signing/verification infra is unavailable.
-bool make_valid_row(ufsecp_ctx* sc, uint8_t msg[32], uint8_t pub33[33],
-                    uint8_t sig64[64]) {
-    for (int seed = 0; seed < 32; ++seed) {
-        uint8_t sk[32] = {0};
-        sk[31] = (uint8_t)(seed * 7 + 3);
-        sk[30] = (uint8_t)(seed * 13 + 1);
-        for (int j = 0; j < 32; ++j)
-            msg[j] = (uint8_t)(seed * 29 + j * 11 + 5);
-        if (ufsecp_pubkey_create(sc, sk, pub33) != UFSECP_OK) return false;
-        if (ufsecp_ecdsa_sign(sc, msg, sk, sig64) != UFSECP_OK) continue;
-        if (ufsecp_ecdsa_verify(sc, msg, sig64, pub33) == UFSECP_OK) return true;
+// Sign-recover the pubkey for a hand-built small-(r, s) signature.
+//   r[31] = r_small, s[62] = 0x03, s[63] = 0x07  ->  r = small, s = 0x0307.
+// A canonical low-S ufsecp_ecdsa_sign output (s ~ 2^255) would make s+n
+// unrepresentable in 32 bytes; a small s makes the malleation class reachable.
+// Returns false only if 32 candidates fail to recover (infrastructure issue).
+bool make_small_valid_row(ufsecp_ctx* sc, uint8_t msg[32], uint8_t pub33[33],
+                          uint8_t sig64[64]) {
+    for (int j = 0; j < 32; ++j)
+        msg[j] = (uint8_t)(0xa5 + j * 7);
+    uint8_t sig[64];
+    for (uint8_t r_small = 1; r_small < 32; ++r_small) {
+        std::memset(sig, 0, 64);
+        sig[31] = r_small;                       // r = r_small
+        sig[62] = 0x03; sig[63] = 0x07;          // s = 0x0307 (tiny, low-S)
+        for (int recid = 0; recid < 2; ++recid) {
+            if (ufsecp_ecdsa_recover(sc, msg, sig, recid, pub33) != UFSECP_OK) continue;
+            if (ufsecp_ecdsa_verify(sc, msg, sig, pub33) == UFSECP_OK) {
+                std::memcpy(sig64, sig, 64);
+                return true;
+            }
+        }
     }
     return false;
 }
@@ -213,17 +294,21 @@ void run_backend(uint32_t bid) {
     AUDIT_LOG("  Backend: %s\n", ufsecp_gpu_backend_name(bid));
 
     uint8_t msg[32], pub[33], base[64];
-    if (!make_valid_row(sc, msg, pub, base)) {
-        AUDIT_LOG("  (ecdsa signing infra unavailable -- skip boundary differential)\n");
+    if (!make_small_valid_row(sc, msg, pub, base)) {
+        AUDIT_LOG("  (ufsecp_ecdsa_recover infra unavailable -- skip boundary differential)\n");
         ufsecp_ctx_destroy(sc);
         ufsecp_gpu_ctx_destroy(ctx);
         return;
     }
 
-    // Row corpus: (label, expected-by-CPU-strict-oracle).
+    // Row corpus: (label, expected-by-CPU-strict-oracle). Rows 1-3 are the
+    // congruent-malleation class of the small base -- representable in 32
+    // bytes because r = 1 and s = 0x0307 are far below 2^256 - n.
     std::vector<Row> rows;
-    rows.push_back({"valid base", true});
-    rows.push_back({"s + n (congruent malleation; representable iff s < 2^256-n)", false});
+    rows.push_back({"valid base (r=small, s=small)", true});
+    rows.push_back({"r, s+n (congruent malleation)", false});
+    rows.push_back({"r+n, s  (congruent malleation)", false});
+    rows.push_back({"r+n, s+n (congruent malleation)", false});
     rows.push_back({"r = n", false});
     rows.push_back({"s = n", false});
     rows.push_back({"r = n-1", false});
@@ -236,11 +321,8 @@ void run_backend(uint32_t bid) {
     const size_t M = rows.size();
     std::vector<uint8_t> dig(M * 32), pks(M * 33), sigs(M * 64);
 
-    // The s+n congruent-malleation row is representable only when the base
-    // s < 2^256 - n (a random canonical s is effectively never that small).
-    // When it does not fit we still exercise the row slot with a definite
-    // > n encoding and assert uniformity; the flag only drives the label.
-    bool has_sn_row = false;
+    // r/s := wildcard per-row; then the congruent rows get +n via 32-byte add.
+    bool all_congruent_representable = true;
     for (size_t i = 0; i < M; ++i) {
         std::memcpy(&dig[i * 32], msg, 32);
         std::memcpy(&pks[i * 33], pub, 33);
@@ -248,19 +330,26 @@ void run_backend(uint32_t bid) {
         copy32(base, r);
         copy32(base + 32, s);
         switch (i) {
-            case 0: break;  // base (valid low-S)
-            case 1: has_sn_row = be_add_order(base + 32, s); break;  // s := s + n
-            case 2: copy32(kOrderBe, r); break;
-            case 3: copy32(kOrderBe, s); break;
-            case 4: copy32(kOrderMinus1Be, r); break;
-            case 5: copy32(kOrderMinus1Be, s); break;
-            case 6: copy32(kZero32, r); break;
-            case 7: copy32(kZero32, s); break;
-            case 8: copy32(kMax32Be, r); break;
-            case 9: copy32(kMax32Be, s); break;
+            case 0: break;  // base (valid, small r/s)
+            case 1: break;  // (r, s+n)
+            case 2: break;  // (r+n, s)
+            case 3: break;  // (r+n, s+n)
+            case 4: copy32(kOrderBe, r); break;
+            case 5: copy32(kOrderBe, s); break;
+            case 6: copy32(kOrderMinus1Be, r); break;
+            case 7: copy32(kOrderMinus1Be, s); break;
+            case 8: copy32(kZero32, r); break;
+            case 9: copy32(kZero32, s); break;
+            case 10: copy32(kMax32Be, r); break;
+            case 11: copy32(kMax32Be, s); break;
             default: break;
         }
-        if (i == 1 && !has_sn_row) copy32(kMax32Be, s);  // s >= n either way
+        if (i == 1) all_congruent_representable &= be_add_order(base + 32, s);  // s := s+n
+        if (i == 2) all_congruent_representable &= be_add_order(base, r);        // r := r+n
+        if (i == 3) {
+            all_congruent_representable &= be_add_order(base + 32, s);           // s := s+n
+            all_congruent_representable &= be_add_order(base, r);                // r := r+n
+        }
         std::memcpy(&sigs[i * 64], r, 32);
         std::memcpy(&sigs[i * 64 + 32], s, 32);
 
@@ -268,12 +357,14 @@ void run_backend(uint32_t bid) {
         rows[i].want_valid = (ufsecp_ecdsa_verify(sc, msg, &sigs[i * 64], pub) == UFSECP_OK);
     }
 
-    // Sanity: the oracle itself is strict (base valid, malleation rejected).
-    CHECK(rows[0].want_valid, "[B] CPU oracle accepts the valid base row (strict parse)");
-    if (has_sn_row)
-        CHECK(!rows[1].want_valid, "[B] CPU oracle rejects the s+n congruent-malleation row (strict parse)");
-    else
-        AUDIT_LOG("  (note: base s >= 2^256-n, s+n malleation unrealizable at this seed; row pinned with s>=n)\n");
+    // With the small base the s+n / r+n classes MUST be representable: if this
+    // ever stops holding, the differential has silently lost its point.
+    CHECK(all_congruent_representable,
+          "[B] congruent-malleation rows (r, s+n)/(r+n, s)/(r+n, s+n) are all 32-byte-representable");
+    CHECK(rows[0].want_valid, "[B] CPU oracle accepts the recovered small-(r, s) base row");
+    CHECK(!rows[1].want_valid, "[B] CPU oracle rejects (r, s+n) (strict parse rejects s >= n)");
+    CHECK(!rows[2].want_valid, "[B] CPU oracle rejects (r+n, s) (strict parse rejects r >= n)");
+    CHECK(!rows[3].want_valid, "[B] CPU oracle rejects (r+n, s+n)");
 
     // ---- batch ----
     std::vector<uint8_t> batch(M, 2);
@@ -301,6 +392,18 @@ void run_backend(uint32_t bid) {
         CHECK(collect_match, "[B] collect verdict == CPU strict oracle per boundary row");
         CHECK(per_row,       "[B] collect == verify_batch verdict per boundary row");
         CHECK(seeded,        "[B] invalid rows are left at the seeded marker (fail-closed)");
+
+        // Explicit pins so a guard that rejects EVERYTHING cannot pass: the
+        // valid base must verify on both entrypoints and each congruent
+        // malleation must be rejected on both.
+        CHECK(batch[0] == 1u && key[0] == 0,
+              "[B] valid base accepted by BOTH verify_batch and ecdsa_verify_collect");
+        CHECK(batch[1] == 0u && key[1] == kSeed,
+              "[B] (r, s+n) rejected by BOTH entrypoints (collect cell stays seeded)");
+        CHECK(batch[2] == 0u && key[2] == kSeed,
+              "[B] (r+n, s) rejected by BOTH entrypoints (collect cell stays seeded)");
+        CHECK(batch[3] == 0u && key[3] == kSeed,
+              "[B] (r+n, s+n) rejected by BOTH entrypoints (collect cell stays seeded)");
     }
 
     ufsecp_ctx_destroy(sc);
@@ -320,7 +423,7 @@ void test_backend_differential() {
 
 }  // namespace
 
-int test_regression_gpu_ecdsa_compact_range_run() {
+int test_gpu_ecdsa_compact_range_run() {
     g_pass = 0; g_fail = 0;
     AUDIT_LOG("=== GPU ECDSA compact-sig strict-range regression ===\n");
     test_source_gate();
@@ -330,5 +433,5 @@ int test_regression_gpu_ecdsa_compact_range_run() {
 }
 
 #ifdef STANDALONE_TEST
-int main() { return test_regression_gpu_ecdsa_compact_range_run(); }
+int main() { return test_gpu_ecdsa_compact_range_run(); }
 #endif

@@ -471,7 +471,7 @@ if(TARGET secp256k1_gpu_host AND (TARGET ufsecp_shared OR TARGET ufsecp_static))
     # CPU-only source gate always runs (needs UFSECP_SOURCE_ROOT to resolve the
     # in-tree kernel sources); the on-device boundary-scalar differential
     # self-skips when no GPU backend is available.
-    add_executable(test_gpu_ecdsa_compact_range test_regression_gpu_ecdsa_compact_range.cpp)
+    add_executable(test_gpu_ecdsa_compact_range test_gpu_ecdsa_compact_range.cpp)
     target_link_libraries(test_gpu_ecdsa_compact_range PRIVATE ${UFSECP_GPU_TEST_LIB})
     target_include_directories(test_gpu_ecdsa_compact_range PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -4086,7 +4086,7 @@ add_executable(unified_audit_runner
     # Native GPU collect verdict == verify_batch verdict per-row (null-ctx contract runs CPU-only)
     test_gpu_collect_verify_parity.cpp
     # GPU ECDSA compact-sig strict r/s<n range: CPU source gate + on-device boundary-scalar differential
-    test_regression_gpu_ecdsa_compact_range.cpp
+    test_gpu_ecdsa_compact_range.cpp
     # CPU range-proof → GPU Bulletproof poly-check consistency (advisory; skips w/o GPU/ZK)
     test_gpu_zk_prove_verify_differential.cpp
     # -- field representation tests --

@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented "collect verdict is bit-identical to verify_batch" invariant. Each
   backend's `ecdsa_verify` now rejects `r >= n` or `s >= n` up front (single
   choke point shared by single/batch/collect and sign-and-verify), and a
-  regression audit (`test_regression_gpu_ecdsa_compact_range.cpp`) pins it with
+  regression audit (`test_gpu_ecdsa_compact_range.cpp`) pins it with
   an always-run CPU source gate (failed against the pre-fix sources) plus an
   on-device `{0, n-1, n, 2^256-1, s+n}` boundary-scalar differential that
   self-skips without a GPU.
